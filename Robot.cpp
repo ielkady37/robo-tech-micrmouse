@@ -253,7 +253,7 @@ void Robot::turn(int target) {
 void Robot::update(void* parameters) {
   while (true) {
     tof.updateReadings();
-    imu.getRoll();
+    imu.getYaw();
 
     vTaskDelay(0);  // yield
   }
