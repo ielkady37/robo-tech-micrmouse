@@ -8,6 +8,10 @@ first; the micromouse codebase serves as a single running illustration, not the
 definition of the topic. By the end you can design your own data structures,
 write your own A*, architect your own layered system, and read any datasheet.
 
+**Audience**: developers with general software experience (Python/JavaScript
+etc.) but no C/C++ or static-typing background. Unit 0 bridges the mental
+model; every later unit builds on it.
+
 ## Authoritative Sources
 - **C/C++**: cppreference.com (definitive language + standard library reference);
   Stroustrup *A Tour of C++* (concise modern overview); K&R *The C Programming
@@ -25,15 +29,84 @@ write your own A*, architect your own layered system, and read any datasheet.
 - **This codebase** (secondary — illustrations only): `micromouse.ino`,
   `algorithm.*`, `API.*`, `Robot.*`, `motor.*`, `IMU.*`, `Tof.*`
 
-## Critical Path (7 units, time-boxed)
+## Critical Path (8 units, time-boxed)
 
-### Unit 1 — C/C++ Language Foundations — 90 min
+### Unit 0 — C/C++ Orientation for General Programmers — 120 min
+**Problem**: you already know how to program — loops, functions, objects, all
+of it — but C/C++ will surprise you. There is no garbage collector, no dynamic
+typing, no runtime safety net. Every variable has a fixed type you must
+declare, every allocation has an owner who must free it, and a pointer is just
+a memory address you can dereference (or crash on). This unit bridges from your
+mental model in Python/JavaScript into the C/C++ mental model — the foundation
+every subsequent unit assumes.
+
+**Learning objectives**:
+- **Static, manual typing**: every variable has a type declared upfront —
+  `int`, `float`, `char`, `bool`, sized types (`uint8_t`, `int32_t`);
+  signed vs unsigned; there is no runtime type inference or dynamic type
+  switching to fall back on
+- **Manual memory & ownership**: stack (automatic, scoped) vs heap (explicit,
+  persistent); `new`/`delete` in C++, `malloc`/`free` in C; "who owns this
+  memory and when does it get freed"; leaks (never freed) and dangling pointers
+  (freed too early or twice)
+- **Value vs reference semantics**: pass-by-value makes a copy; pass-by-reference
+  (`T&`) aliases the original; pass-by-pointer (`T*`) also aliases but can be
+  null; `const` correctness basics — `const T&` for read-only access,
+  `const T*` for read-only pointed-to data
+- **Pointers**: a pointer holds a memory address; dereferencing (`*p`) reads/
+  writes the pointed-to value; address-of (`&x`) gets the address; `nullptr`;
+  pointer vs reference — a pointer can be reassigned and be null, a reference
+  cannot
+- **Arrays & strings**: arrays are contiguous blocks of raw memory; array name
+  decays to a pointer; C-strings are null-terminated `char` arrays (no length,
+  no bounds checking); `std::string` is safer; out-of-bounds access is
+  undefined behavior — it may crash, corrupt data, or appear to work
+- **The build & type-checking loop**: source → preprocess → compile → link →
+  binary; the compiler is your first reviewer and catches type errors before
+  runtime; reading compiler errors (they mention types constantly); contrast
+  with interpreted "just run it and see"
+- **Structs**: a plain data aggregate — fields grouped together, no methods
+  yet; the stepping stone before classes — `struct Point { int x; int y; };`
+  then `Point p = {3, 4};`
+- **First working program**: a minimal annotated example showing type
+  declarations, a function, a pointer, stack allocation, and output:
+  ```cpp
+  #include <iostream>
+
+  int add(int a, int b) {       // typed parameters, typed return
+      return a + b;
+  }
+
+  int main() {
+      int x = 5;                // stack-allocated integer
+      int* ptr = &x;            // pointer holds address of x
+      std::cout << *ptr << "\n"; // dereference: prints 5
+      return 0;                 // 0 means success
+  }
+  ```
+- **Foundational vocabulary**: declaration (announces a name) vs definition
+  (allocates storage); scope (where a name is visible); translation unit (a
+  single .cpp after preprocessing); linkage (how names connect across units) —
+  just the words now; depth comes in Unit 1
+
+**Where used here**: `algorithm.cpp::getCell()` takes
+`uint8_t row, uint8_t col` and returns `(col << 4) | (row & 0x0F)` — an early
+example of the explicit sized types and raw-memory bit manipulation this unit
+introduces; the 16×16 maze fits because each coordinate fits in 4 bits.
+
+**Canonical reference**: Stroustrup *Programming: Principles and Practice
+Using C++* (2nd ed, Ch. 1–7 — types, operations, functions, arrays, pointers,
+structs) + cppreference.com
+
+---
+
+### Unit 1 — C++ Idioms, Build Toolchain & Standard Library — 90 min
 **Problem**: master the language features any non-trivial C/C++ project uses,
 so you can read, write, and reason about code in any codebase.
 
+> Assumes Unit 0 vocabulary: pointer, reference, const, struct, stack vs heap.
+
 **Learning objectives**:
-- Memory model: stack vs heap, pointers vs references, value semantics,
-  when to use which
 - `const`, `constexpr`, `#define` — why macros are dangerous and when
   `constexpr` replaces them
 - `static`: three meanings (local persistence, internal linkage, class member)
@@ -41,10 +114,10 @@ so you can read, write, and reason about code in any codebase.
   (One Definition Rule)
 - STL essentials: `std::vector`, `std::priority_queue`, `std::map`,
   `std::pair`, iterators, range-for
-- Structs vs classes, access specifiers, operator overloading
-- Build model: preprocess → compile → link; toolchain basics (GCC/clang,
-  CMake, Make); Arduino/ESP32 specifics (`setup`/`loop`, `IRAM_ATTR`,
-  `portMUX_TYPE`)
+- Classes (not just structs): access specifiers, constructors/destructors,
+  operator overloading
+- Build model depth: toolchain basics (GCC/clang, CMake, Make); Arduino/ESP32
+  specifics (`setup`/`loop`, `IRAM_ATTR`, `portMUX_TYPE`)
 
 **Where used here**: `algorithm.cpp` defines a `Node` struct with
 `operator>` so `std::priority_queue<Node, vector<Node>, greater<Node>>`
@@ -193,6 +266,9 @@ descent on the precomputed costs.
 depends on an interface, not on concrete hardware — the same pattern
 used in game AI, robotics frameworks, and simulation systems.
 
+> Assumes Unit 0 vocabulary (pointer, reference, const, struct) and Unit 1
+> class/interface syntax.
+
 **Learning objectives**:
 - Define the application seam: an `IMazeEnvironment` interface
   (`senseWalls()`, `move()`, `turn()`) that the navigator depends on
@@ -220,10 +296,11 @@ gameprogrammingpatterns.com)
 
 ### Unit 7 — Quiz & Review — 30 min
 - ▶ READ `tutor/crash/quick-quiz.md`
-- Confirm Units 1–6 with the quick-quiz format; add gaps to review list
+- Confirm Units 0–6 with the quick-quiz format; add gaps to review list
 - Optional deeper dive: switch to Deep mode per-topic if more depth is
   wanted
 
 ## Prerequisite Chain
-1 → 2 → 3 and 4 → 5 → 6
-(Units 3 and 4 are independent; both feed Unit 5 and Unit 6.)
+0 → 1 → 2 → 3 and 0 → 4 → 5 → 6
+(Unit 0 is a universal prerequisite. Units 3 and 4 are independent; both feed
+Units 5 and 6.)
