@@ -1,91 +1,229 @@
 # Tutor Syllabus (Crash)
 
 ## Scenario
-Design and build a proper **navigation unit** (an application layer) for this
-ESP32 micromouse so that maze logic talks to an interface instead of reaching
-down into low-level hardware. Along the way we master C/C++, hardware
-interfacing, data structures, OOD/layered architecture, and an A* maze solver —
-each taught against the actual files in this repo.
+Learn the five foundational disciplines behind embedded robotics — C/C++,
+hardware interfacing, data structures, layered architecture, and graph search —
+as *general, transferable knowledge*. Each unit teaches the universal concepts
+first; the micromouse codebase serves as a single running illustration, not the
+definition of the topic. By the end you can design your own data structures,
+write your own A*, architect your own layered system, and read any datasheet.
 
 ## Authoritative Sources
-- Primary: the codebase itself (`micromouse.ino`, `algorithm.*`, `API.*`,
-  `Robot.*`, `motor.*`, `IMU.*`, `Tof.*`)
-- Secondary: `docs/` in this repo (architecture, algorithms, design-decisions)
-- Reference: C++ cppreference, Arduino-Espressif / ESP32 API docs
+- **C/C++**: cppreference.com (definitive language + standard library reference);
+  Stroustrup *A Tour of C++* (concise modern overview); K&R *The C Programming
+  Language* (classic foundations)
+- **Embedded**: Elecia White *Making Embedded Systems* (practical hardware +
+  software co-design); ESP32 Technical Reference Manual (bus/peripheral details)
+- **Data structures & algorithms**: CLRS *Introduction to Algorithms* (Ch. 6,
+  10, 22–24 — heaps, graphs, shortest paths); Weiss *Data Structures and
+  Algorithm Analysis in C++*
+- **Architecture**: Robert C. Martin *Clean Architecture* (layering, dependency
+  rule, SOLID); *Head First Design Patterns* (Adapter, Facade chapters)
+- **Graph search**: Russell & Norvig *Artificial Intelligence: A Modern
+  Approach* (Ch. 3 — uninformed & informed search); Hart, Nilsson & Raphael
+  original A* paper (1968)
+- **This codebase** (secondary — illustrations only): `micromouse.ino`,
+  `algorithm.*`, `API.*`, `Robot.*`, `motor.*`, `IMU.*`, `Tof.*`
 
 ## Critical Path (7 units, time-boxed)
 
-### Unit 1 — C/C++ Foundations for this Project — 90 min
-Problem: understand every language feature the existing code already uses so
-you can read before you write.
-Cover, against real files:
-- Pointers, references, `static` (class + file scope) — see `Robot` singleton
-- `const`, `constexpr`, magic numbers vs `#define` — thresholds in `Robot.cpp`
-- Namespaces, includes/headers, one-definition-rule
-- STL containers used here: `std::priority_queue`, `std::vector` in `algorithm.cpp`
-- Structs vs classes; access specifiers
-- Arduino/ESP32 quirks: `setup/loop`, `IRAM_ATTR`, `portMUX_TYPE`
+### Unit 1 — C/C++ Language Foundations — 90 min
+**Problem**: master the language features any non-trivial C/C++ project uses,
+so you can read, write, and reason about code in any codebase.
 
-### Unit 2 — Hardware Interfacing for This Robot — 120 min
-Problem: how do I2C sensors, GPIO, PWM, encoders, ISRs, and FreeRTOS tasks work
-together to feed the navigation layer reliable data without it knowing a wire
-ever moved.
-Cover, against real files:
-- I2C bus + device addressing: `Tof.setID()` XSHUT bring-up, IMU at 0x4B
-- GPIO, PWM (`analogWrite`), quadrature encoder ISRs + critical sections (`motor.*`)
-- FreeRTOS: sensor refresh task on Core 0 (mutexes/semaphores) vs `loop()` on Core 1
-- Thread-safety: why IMU/ToF caches use semaphores
-- Sensor → data: mm ranges → wall booleans (thresholds)
+**Learning objectives**:
+- Memory model: stack vs heap, pointers vs references, value semantics,
+  when to use which
+- `const`, `constexpr`, `#define` — why macros are dangerous and when
+  `constexpr` replaces them
+- `static`: three meanings (local persistence, internal linkage, class member)
+- Translation units, headers, `#pragma once` vs include guards, ODR
+  (One Definition Rule)
+- STL essentials: `std::vector`, `std::priority_queue`, `std::map`,
+  `std::pair`, iterators, range-for
+- Structs vs classes, access specifiers, operator overloading
+- Build model: preprocess → compile → link; toolchain basics (GCC/clang,
+  CMake, Make); Arduino/ESP32 specifics (`setup`/`loop`, `IRAM_ATTR`,
+  `portMUX_TYPE`)
 
-### Unit 3 — Data Structures for This Project — 90 min
-Problem: represent a 16x16 maze, discoveries, and a distance field compactly and
-safely on a microcontroller.
-Cover, against real files:
-- 2D arrays `[16][16]`, packing row/col into a byte; adjacency/north-east wall encoding
-- `Direction` enum + modular arithmetic for relative turns
-- Priority queue / binary heap for A* open set
-- Sentinel sentinels: `UINT8_MAX` for unreachable, and why it's risky (RD-27)
-- NVS persistence of the 3 matrices via `Preferences`
+**Where used here**: `algorithm.cpp` defines a `Node` struct with
+`operator>` so `std::priority_queue<Node, vector<Node>, greater<Node>>`
+orders by `f`-cost — a standard pattern for any min-heap of custom types.
 
-### Unit 4 — OOD & Layered Architecture (Problem-Oriented) — 120 min
-Problem: today the solver reaches into the world through a hard-coded static
-singleton (`API`) that duplicates pose state, and `Robot` is a monolithic
-static class. We will refactor so the navigation unit depends on **interfaces**,
-not on concrete hardware, enabling sim/real swap and host-side unit tests.
-Cover:
-- Layered architecture: application/navigation layer → interface seam → driver layer
-- Interfaces / abstract classes: define `IMazeEnvironment` (sense walls, move,
-  turn) as the *problem's contract* — not a mechanical copy of the API
-- Dependency inversion: navigation unit receives the interface (constructor/DI),
-  never `#include`s `Robot`/`IMU`/`Tof` directly
-- Single Responsibility: split `Robot`'s sensing vs motion vs odometry concerns
-- The trouble with singletons & hidden global pose (API vs algorithm dual state)
-- Exercises: extract interfaces, wire sim + real implementations behind one unit
+**Canonical reference**: Stroustrup *A Tour of C++* (Ch. 1–5) +
+cppreference.com
 
-### Unit 5 — A* Maze Solving for This Robot — 120 min
-Problem: from a partially explored maze, produce a shortest path to the goal
-cells (7,7..8,8), updating as new walls are discovered.
-Cover, against real files:
-- Grid as graph; neighbors through open walls
-- A*: `g` (moves so far), `h` (Manhattan heuristic), `f = g+h`; min-heap open set
-- Distance map as gradient field; greedy descent = follow falling gradient
-- Recompute-on-discovery vs incremental updates (RD-26)
-- Adapting to a 3-sensor mouse: only front/left/right walls known per cell
-- Return-to-start phase (RD-11) and speed-run phase as extensions
+---
 
-### Unit 6 — Integration: The Navigator Application Layer — 90 min
-Problem: assemble Units 1–5 into a `Navigator` that sits on `IMazeEnvironment`
-and drives exploration without touching hardware.
-Cover:
-- Build a clean navigation unit + interface + adapter wiring
-- Verify on host with the simulator backend; keep domain code hardware-free
-- Test seam: `updateDistancesAStar` + `getNextMovement` unit-testable on host
-- Avoid the old dual-pose bug by keeping one source of truth in the navigator
+### Unit 2 — Embedded Hardware Interfacing — 120 min
+**Problem**: understand how microcontrollers talk to the physical world —
+buses, GPIO, PWM, interrupts, sensors, and real-time concurrency — so you
+can integrate *any* sensor or actuator from a datasheet.
 
-### Unit 7 — Quiz + Review List — 30 min
+**Learning objectives**:
+- Serial buses: I2C (topology, addressing, pull-ups, clock stretching),
+  SPI (MOSI/MISO/SCLK/CS, full-duplex), UART (TX/RX, baud) — when to
+  use which
+- GPIO modes: input, output, input-pullup, open-drain; debouncing
+- PWM: duty cycle, frequency, `analogWrite` / LEDC on ESP32; driving
+  motors via H-bridge
+- Quadrature encoders: A/B channels, direction decoding, ISR constraints
+  (keep short, use `volatile`, `IRAM_ATTR` on ESP32)
+- Interrupts: latency, nesting, critical sections (`portMUX_TYPE`,
+  `portENTER_CRITICAL`)
+- Real-time concurrency: FreeRTOS tasks, priorities, `xTaskCreatePinnedToCore`;
+  mutexes vs semaphores vs critical sections — when each is appropriate
+- Reading a datasheet: register maps, timing diagrams, initialization
+  sequences, error states
+
+**Where used here**: `Tof.cpp::setID()` demonstrates the classic I2C
+address-conflict workaround — three VL53L0X sensors share one bus by
+sequencing their XSHUT shutdown pins to reassign addresses at boot.
+
+**Canonical reference**: Elecia White *Making Embedded Systems* (Ch. 5–8)
++ ESP32 Technical Reference Manual (I2C, LEDC, GPIO chapters)
+
+---
+
+### Unit 3 — Data Structures & When to Choose Them — 90 min
+**Problem**: pick the right structure for the job — not by memorizing a
+list, but by understanding trade-offs (time, space, cache behavior,
+complexity) on constrained hardware.
+
+**Learning objectives**:
+- Arrays: 1D, 2D (row-major layout), fixed-size vs dynamic; when a flat
+  array beats a linked list (cache locality, no allocation)
+- Enums + modular arithmetic for cyclic state machines (directions, phases)
+- Graphs: adjacency matrix vs adjacency list vs *implicit* graph (grid
+  neighbors computed on the fly) — space/time trade-offs
+- Heaps / priority queues: binary heap properties, `std::priority_queue`
+  (max-heap by default, `std::greater` for min-heap), O(log n) insert/extract
+- Stacks (LIFO) and queues (FIFO) — BFS uses queue, DFS uses stack,
+  Dijkstra/A* uses priority queue
+- Bit-packing: squeezing two 4-bit values into one `uint8_t` for
+  memory-constrained grids
+- Sentinel values vs optional types: `UINT8_MAX` as "unreachable" —
+  the risk of arithmetic overflow with unsigned sentinels
+
+**Where used here**: `algorithm.cpp` packs `(row, col)` into a single
+`uint8_t` via `(col << 4) | (row & 0x0F)` — a space optimization that
+works because the grid is exactly 16×16 (each index fits in 4 bits).
+
+**Canonical reference**: CLRS *Introduction to Algorithms* (Ch. 6 Heaps,
+Ch. 10 Elementary Structures, Ch. 22 Elementary Graph Algorithms)
+
+---
+
+### Unit 4 — OOD, Layered Architecture & Abstraction — 120 min
+**Problem**: design software that can change — swap hardware for a
+simulator, add tests, refactor one layer without breaking another —
+using universal principles, not project-specific hacks.
+
+**Learning objectives**:
+- SOLID: Single Responsibility, Open/Closed, Liskov Substitution,
+  Interface Segregation, Dependency Inversion — what each actually means
+- Interfaces / abstract classes: defining a *contract* (pure virtual
+  functions in C++), why they enable polymorphism and testability
+- Dependency Injection: constructor injection, setter injection —
+  receiving dependencies rather than reaching for globals
+- Layered architecture: presentation → application → domain →
+  infrastructure; the Dependency Rule (inner layers know nothing of
+  outer layers)
+- Adapter pattern: wrapping a concrete implementation behind an
+  interface (e.g., a `RealRobot` adapter and a `SimRobot` adapter both
+  implementing `IMazeEnvironment`)
+- Facade pattern: simplifying a complex subsystem behind a clean API
+- The singleton anti-pattern: hidden global state, duplicate state,
+  untestability — and when a singleton *is* acceptable (rare)
+- When NOT to over-engineer: YAGNI, small embedded projects with tight
+  memory/flash — pragmatism over purity
+
+**Where used here**: the current `API` class is a static singleton that
+maintains its own `currentX`/`currentY`/`currentDirection` — duplicating
+the pose state already tracked in `algorithm.cpp`'s globals. This is a
+textbook case of why hidden global state causes divergence bugs.
+
+**Canonical reference**: Robert C. Martin *Clean Architecture* (Part 2:
+Paradigms, Part 4: Principles, Part 5: Architecture) + *Head First
+Design Patterns* (Adapter & Facade chapters)
+
+---
+
+### Unit 5 — Graph Search & Pathfinding — 120 min
+**Problem**: find shortest paths in any graph — grid, road network,
+state space — using the right algorithm for the job, with understanding
+of *why* it works.
+
+**Learning objectives**:
+- Graph representations revisited: grid as implicit graph, neighbors
+  through open edges
+- Uninformed search: BFS (shortest path on unweighted graphs), DFS
+  (exploration, not optimal)
+- Dijkstra's algorithm: weighted graphs, priority queue, greedy
+  expansion by minimum cost — the foundation A* builds on
+- A*: `f = g + h`, open set (priority queue), closed set (or
+  re-expansion check), heuristic design
+- Heuristics: admissibility (never overestimates), consistency
+  (triangle inequality), why Manhattan distance is admissible on grids,
+  what happens when h is inadmissible
+- Priority queues in search: why `std::priority_queue` with lazy
+  deletion (skip stale entries) is simpler than decrease-key
+- Grid pathfinding specifics: 4-connected vs 8-connected, diagonal
+  cost (√2), tie-breaking
+- Partial knowledge & replanning: when the map changes mid-search
+  (new walls discovered), recompute vs incremental (D* Lite, LPA*)
+- Distance map as gradient field: once A* fills `distance[][]`, greedy
+  descent (always move to lowest neighbor) yields the optimal path
+  without re-running search — the "flood fill" interpretation
+
+**Where used here**: `updateDistancesAStar()` runs A* from the goal
+cells outward with Manhattan heuristic; the resulting `distance[][]`
+array is then used by `getNextMovement()` as a gradient field — greedy
+descent on the precomputed costs.
+
+**Canonical reference**: Russell & Norvig *AI: A Modern Approach*
+(Ch. 3 — Solving Problems by Searching) + Hart, Nilsson & Raphael
+"A Formal Basis for the Heuristic Determination of Minimum Cost Paths"
+(1968)
+
+---
+
+### Unit 6 — Integration: Building a Navigator Layer — 90 min
+**Problem**: assemble Units 1–5 into a clean application layer that
+depends on an interface, not on concrete hardware — the same pattern
+used in game AI, robotics frameworks, and simulation systems.
+
+**Learning objectives**:
+- Define the application seam: an `IMazeEnvironment` interface
+  (`senseWalls()`, `move()`, `turn()`) that the navigator depends on
+- Wire adapters: `RealRobotEnvironment` (wraps actual hardware) and
+  `SimEnvironment` (wraps a simulator) behind the same interface
+- Single source of truth: the navigator owns pose; no duplicate state
+  in the environment or algorithm layer
+- Host-side testing: run the navigator on a PC with the sim backend —
+  no hardware required, fast iteration
+- Incremental development: build the interface first, then one adapter,
+  then the solver, then the second adapter
+- Avoiding the dual-pose bug: one class owns state, everyone else
+  receives it
+
+**Where used here**: the target architecture — a `Navigator` class
+receiving `IMazeEnvironment&` via constructor injection, calling
+`updateDistancesAStar()` and `getNextMovement()` without ever
+`#include`-ing `Robot.h`, `IMU.h`, or `Tof.h`.
+
+**Canonical reference**: Robert Nystrom *Game Programming Patterns*
+(State, Command, Observer chapters — free online at
+gameprogrammingpatterns.com)
+
+---
+
+### Unit 7 — Quiz & Review — 30 min
 - ▶ READ `tutor/crash/quick-quiz.md`
 - Confirm Units 1–6 with the quick-quiz format; add gaps to review list
-- Optional deeper dive: switch to Deep mode per-topic if more depth is wanted
+- Optional deeper dive: switch to Deep mode per-topic if more depth is
+  wanted
 
 ## Prerequisite Chain
-1 → 2 → 3 and 4 → 5 → 6 (Units 3 and 4 can precede 5; both feed Unit 6).
+1 → 2 → 3 and 4 → 5 → 6
+(Units 3 and 4 are independent; both feed Unit 5 and Unit 6.)
