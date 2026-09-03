@@ -1,6 +1,2 @@
-# AI Tutor (course definition is committed; personal runtime state is not)
-.ai/tutor-progress.md
-.ai/study-sessions.md
-.ai/lessons/
-.ai/playground/
-.ai/cheatsheets/
+# AI Tutor state (personal — never commit)
+.ai-state/
