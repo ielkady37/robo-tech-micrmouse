@@ -46,6 +46,8 @@ Goal: every sensor/actuator works correctly on its own, talking directly to test
 | 1.1.2 | Power on from battery | Same boot behavior; measure battery voltage under no load |
 | 1.1.3 | Brown-out check | No resets/reboots when motors are commanded to spin (see 1.3) while on battery |
 
+Runnable sketches for these components live alongside this doc: [tof_test/](tof_test/tof_test.ino), [motor_test/](motor_test/motor_test.ino), [imu_test/](imu_test/imu_test.ino), [switch_led_test/](switch_led_test/switch_led_test.ino). Each symlinks the real driver source (`Tof.h/.cpp`, `motor.h/.cpp`, `IMU.h/.cpp`) into its own folder so it's testing actual production code, and each header-comments its own wiring. Compile/flash with `arduino-cli` (see the toolchain notes at the end of this doc) — flashing any of them temporarily replaces `micromouse.ino` on the board; reflash the main firmware afterward.
+
 ### 1.2 Encoders (`motor.cpp`, `ENCAL/ENCBL` = GPIO 39/36, `ENCAR/ENCBR` = GPIO 34/35)
 
 | # | Test | Pass criteria |
@@ -195,3 +197,17 @@ Copy this table per test session:
 - [ ] Phase 1 (Unit) — all components pass in isolation
 - [ ] Phase 2 (Integration) — closed-loop motion and sensor fusion pass, repeatable ×3
 - [ ] Phase 3 (System) — full maze runs pass, repeatable per acceptance criteria
+
+## Toolchain notes
+
+The Arduino IDE snap on this machine bundles Python 3.6, which crashes the ESP32 core's upload tool (`SyntaxError: future feature annotations is not defined`) — the fix in place is documented inline in `flasher.py` (patched in the snap's own `~/snap/arduino/85/.arduino15/packages/esp32/hardware/esp32/3.3.11/tools/`, original backed up alongside it as `flasher.py.orig-py37`). The IDE's own Upload button should work now; if the port ever shows `No more data to read from the serial port`, close any open Serial Monitor window first (it and the upload both fight over the port) and retry.
+
+For scripted use, `arduino-cli` (installed to `~/.local/bin`) is configured to reuse the snap's existing board packages and libraries:
+
+```
+export ARDUINO_CONFIG_FILE=~/.config/arduino-cli/arduino-cli.yaml
+arduino-cli compile --fqbn esp32:esp32:esp32 --export-binaries "<sketch folder>"
+arduino-cli upload  -p /dev/ttyUSB0 --fqbn esp32:esp32:esp32 "<sketch folder>"
+```
+
+`mm-compile` / `mm-upload [port]` do the same for the main `micromouse.ino` firmware specifically (defined in `~/.local/bin`, pointing at `~/Arduino_cli_sketches/micromouse`, a symlink mirror of this repo's root — arduino-cli requires the sketch folder name to match the `.ino` file name, which the repo's own folder name doesn't).
