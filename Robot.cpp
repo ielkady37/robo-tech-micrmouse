@@ -2,17 +2,21 @@
 #include "Robot.h"
 #include <math.h>
 #include "Preferences.h"
-#define MIN_SPEED_FORWARD 50
+#define MIN_SPEED_FORWARD 35
 #define MAX_SPEED_FORWARD 65
 
-#define MIN_SPEED_ROT 40
+#define MIN_SPEED_ROT 28
 #define MAX_SPEED_ROT 70
 
 #define MAX_ERROR 90
 #define DEADZONE 0.7
 #define CELL_SIZE 18
-const int REQUIRED_STABLE = 2;   // must stay within tolerance 5 times in a row
-const float ERROR_TOL = 0.3;
+const int REQUIRED_STABLE = 5;   // must stay within tolerance 5 times in a row
+const float ERROR_TOL = 0.15;    // turn() heading tolerance, degrees
+const float DIST_ERROR_TOL = 1.0;  // move() distance tolerance, cm -- must stay
+                                    // above DEADZONE (0.7) or the deadzone can
+                                    // stop the motors before this is satisfied,
+                                    // hanging move() forever (see conversation).
 // Preferences prefs;
 
 //Static Variables
@@ -89,8 +93,8 @@ void Robot::move(int cells) {
     float kd_dist = 4.0;
 
     // Heading PID
-    float kp_heading = 2;
-    float kd_heading = 0.5;
+    float kp_heading = 1.0;
+    float kd_heading = 0.15;
 
     float eprev_dist = 0;
     float eprev_heading = 0;
@@ -120,7 +124,12 @@ void Robot::move(int cells) {
         // --- Heading PID ---
         float error_heading = startYaw - currentYaw;
         float derv_heading  = error_heading - eprev_heading;
-        float pid_heading   = constrain(kp_heading * error_heading + kd_heading * derv_heading,-MAX_SPEED_ROT, MAX_SPEED_ROT);
+        // Clamped well below MIN_SPEED_FORWARD so heading correction can
+        // never flip a wheel's direction sign on its own (that was causing
+        // oscillation regardless of gains -- this used to be clamped to
+        // +-MAX_SPEED_ROT, a rotation-speed constant with no relation to
+        // the forward-speed range actually being mixed into here).
+        float pid_heading   = constrain(kp_heading * error_heading + kd_heading * derv_heading, -20.0f, 20.0f);
         // if (pid_heading > 0.7 && pid_heading <= MIN_SPEED_ROT) {
         //   pid_heading = MIN_SPEED_ROT;
         // } else if (pid_heading < -0.7 && pid_heading >= -MIN_SPEED_ROT) {
@@ -129,8 +138,8 @@ void Robot::move(int cells) {
         //   pid_heading = 0;  // deadband zone
         // }
         // Mix heading correction into motor speeds
-        float rightSpeed  = baseSpeed - pid_heading*0;
-        float leftSpeed = baseSpeed + pid_heading*0;
+        float rightSpeed  = baseSpeed - pid_heading;
+        float leftSpeed = baseSpeed + pid_heading;
 
         // Clamp to motor limits
         leftSpeed  = constrain(leftSpeed, -MAX_SPEED_FORWARD, MAX_SPEED_FORWARD);
@@ -161,18 +170,24 @@ void Robot::move(int cells) {
         eprev_heading = error_heading;
 
         // Debug
-        // Serial.print("|| DistErr: ");
-        // Serial.println(error_dist);
-        // Serial.print("|| current: ");
-        // Serial.println(currentDist);
-        // Serial.print("|| Lspeed: ");
-        // Serial.print(leftSpeed);
-        // Serial.print("|| Rspeed: ");
-        // Serial.println(rightSpeed);
+        static unsigned long lastMovePrint = 0;
+        if (millis() - lastMovePrint > 50) {
+          lastMovePrint = millis();
+          Serial.print(" || distErr: ");
+          Serial.print(error_dist);
+          Serial.print(" || dist: ");
+          Serial.print(currentDist);
+          Serial.print(" || Lspeed: ");
+          Serial.print(leftSpeed);
+          Serial.print(" || Rspeed: ");
+          Serial.print(rightSpeed);
+          Serial.print(" || yawErr: ");
+          Serial.println(error_heading);
+        }
 
         // Exit condition
         if(tof.getTofCenter() < 40)break;
-        if (fabs(error_dist) < ERROR_TOL) {
+        if (fabs(error_dist) < DIST_ERROR_TOL) {
             stableCount++;
             if (stableCount >= REQUIRED_STABLE) break;
         } else {
@@ -183,6 +198,16 @@ void Robot::move(int cells) {
     motor_driver.resetEncoderR();
     motor_driver.setMotors(0, 0);
     delay(750);
+
+    // Final heading check: the loop above only exits on distance, so
+    // whatever heading error happens to remain when distance settles is
+    // left uncorrected by the continuous heading-hold. Explicitly turn
+    // back to the angle recorded before this move started.
+    imu.update();
+    float finalYawError = startYaw - (-imu.getYaw());
+    if (fabs(finalYawError) > ERROR_TOL) {
+      turn((int)round(finalYawError));
+    }
 }
 
 
@@ -223,19 +248,24 @@ void Robot::turn(int target) {
     } else if (speed >= -0.7 && speed <= 0.7) {
       speed = 0;  // deadband zone
     }
-    if (target > 0)
-      speed += speed < 0 ? -15 : 15; 
-    
+    if (fabs(error) > 10.0f) {          // kick only far from target (RD-02)
+      speed += (speed >= 0) ? 15 : -15;  // reinforce current direction, either sign of target
+    }
+
     motor_driver.setMotors(speed, -speed);
     eprev = error;
-    Serial.print(" || PID: ");
-    Serial.print(pidSignal);
-    Serial.print(" || error: ");
-    Serial.print(error);
-    Serial.print(" || speed: ");
-    Serial.print(speed);
-    Serial.print(" || IMU: ");
-    Serial.println(imu.getYaw());
+    static unsigned long lastTurnPrint = 0;
+    if (millis() - lastTurnPrint > 50) {
+      lastTurnPrint = millis();
+      Serial.print(" || PID: ");
+      Serial.print(pidSignal);
+      Serial.print(" || error: ");
+      Serial.print(error);
+      Serial.print(" || speed: ");
+      Serial.print(speed);
+      Serial.print(" || IMU: ");
+      Serial.println(imu.getYaw());
+    }
 
     if (fabs(error) < ERROR_TOL) {
       stableCount++;

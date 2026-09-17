@@ -109,6 +109,8 @@ Goal: components that passed individually now work together through the `Robot` 
 
 **Wheels off the ground for 2.1–2.3.** Only move to wheels-on-ground for 2.4 onward, in open space with room to roll.
 
+Runnable sketch: [integration_test/](integration_test/integration_test.ino) — symlinks `Robot.h/.cpp` (and its `Tof`/`IMU`/`motor` dependencies) into its own folder, so it drives the real `Robot::begin/move/turn/snapToCardinal/isWallFront-Left-Right`, not a reimplementation. Serial commands: `sensors`, `walls`, `move <N>`, `turn <deg>`, `snap`, `drift CONFIRM` (see the sketch header — this one runs both motors at max PWM for 5s unattended per RD-07, wheels off the ground only), `help`. A one-second heartbeat line (ToF distances + wall booleans) streams by default.
+
 ### 2.1 Sensor task concurrency (`Robot::update`, core 0 FreeRTOS task)
 
 | # | Test | Pass criteria |
