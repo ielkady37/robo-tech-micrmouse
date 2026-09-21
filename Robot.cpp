@@ -90,13 +90,15 @@ void Robot::move(int cells) {
     float kd_dist = 4.0;
 
     // Heading PID
-    float kp_heading = 2;
-    float kd_heading = 0.05;  // dt-normalized (deg/s) derivative gain -- re-tune on hardware
+    float kp_heading = 0.8;   // was 2, but that value was never actually exercised (heading
+                              // correction was dead code until now) -- starting conservative
+    float kd_heading = 0.02;  // dt-normalized (deg/s) derivative gain -- re-tune on hardware
 
     float eprev_dist = 0;
     float eprev_heading = 0;
 
     int stableCount = 0;
+    bool wallDetected = false;
 
     // float startDistance = (motor_driver.getDistanceL() + motor_driver.getDistanceR())/2;
     float startDistance = 0;
@@ -171,8 +173,14 @@ void Robot::move(int cells) {
         Serial.print("|| Rspeed: ");
         Serial.println(rightSpeed);
 
+        // Wall safety stop: redefine the target as "here" so the distance PID
+        // decelerates and settles smoothly instead of an abrupt motor cutoff.
+        if (!wallDetected && tof.getTofCenter() < 40) {
+          wallDetected = true;
+          desiredDistance = currentDist;
+        }
+
         // Exit condition
-        if(tof.getTofCenter() < 40)break;
         if (fabs(error_dist) < ERROR_TOL) {
             stableCount++;
             if (stableCount >= REQUIRED_STABLE) break;
