@@ -118,6 +118,15 @@ void Robot::move(int cells) {
         lastTime = now;
         if (dt <= 0) dt = 0.001f;  // guard against a zero/degenerate sample
 
+        // Wall safety stop: redefine the target as "here" so the distance PID
+        // decelerates and settles smoothly instead of an abrupt motor cutoff.
+        // eprev_dist is reset in the same pass so this isn't seen as a derivative spike.
+        if (!wallDetected && tof.getTofCenter() < 40) {
+          wallDetected = true;
+          desiredDistance = currentDist;
+          eprev_dist = 0;
+        }
+
         // --- Distance PID ---
         float error_dist = desiredDistance - currentDist;
         float derv_dist  = error_dist - eprev_dist;
@@ -125,6 +134,7 @@ void Robot::move(int cells) {
 
         // Clamp forward speed
         float baseSpeed = constrain(pid_dist, -MAX_SPEED_FORWARD, MAX_SPEED_FORWARD);
+        if (wallDetected) baseSpeed = constrain(baseSpeed, 0.0f, (float)MAX_SPEED_FORWARD);  // never back away from a detected wall
 
         // --- Heading PID ---
         float error_heading = startYaw - currentYaw;
@@ -172,13 +182,6 @@ void Robot::move(int cells) {
         Serial.print(leftSpeed);
         Serial.print("|| Rspeed: ");
         Serial.println(rightSpeed);
-
-        // Wall safety stop: redefine the target as "here" so the distance PID
-        // decelerates and settles smoothly instead of an abrupt motor cutoff.
-        if (!wallDetected && tof.getTofCenter() < 40) {
-          wallDetected = true;
-          desiredDistance = currentDist;
-        }
 
         // Exit condition
         if (fabs(error_dist) < ERROR_TOL) {
