@@ -13,6 +13,7 @@
 #define CELL_SIZE 18
 const int REQUIRED_STABLE = 2;   // must stay within tolerance 5 times in a row
 const float ERROR_TOL = 0.3;
+const float RATE_TOL = 10.0;     // deg/s -- must also be near-stationary to call a turn settled
 // Preferences prefs;
 
 //Static Variables
@@ -189,18 +190,21 @@ void Robot::move(int cells) {
 
 void Robot::turn(int target) {
   float kp = 0.5;
-  float kd = 11;
-  int eprev = 0;
+  float kd = 0.06;  // dt-normalized (deg/s) derivative gain -- re-tune on hardware
+  float eprev = 0;
   int stableCount = 0;
 
   float startAngle = -imu.getYaw();
   float desiredHeading = startAngle + target;
 
-  int pidSignal;
-  int speed = 0;
+  float pidSignal;
+  float speed = 0;
   float current;
   float error;
   float derv;
+  float angularVelocity;
+
+  unsigned long lastTime = micros();
 
   motor_driver.setMotors(0, 0);
   while (true) {
@@ -208,7 +212,14 @@ void Robot::turn(int target) {
 
     current = -imu.getYaw();
     error = desiredHeading - current;  // relative to desired heading
-    derv = error - eprev;
+
+    unsigned long now = micros();
+    float dt = (now - lastTime) / 1000000.0f;
+    lastTime = now;
+    if (dt <= 0) dt = 0.001f;  // guard against a zero/degenerate sample
+
+    derv = (error - eprev) / dt;  // deg/s
+    angularVelocity = -derv;      // deg/s, actual turn rate
     pidSignal = kp * error + kd * derv;
 
     // Scale PID output into motor speed range
@@ -223,21 +234,21 @@ void Robot::turn(int target) {
     } else if (speed >= -0.7 && speed <= 0.7) {
       speed = 0;  // deadband zone
     }
-    if (target > 0)
-      speed += speed < 0 ? -15 : 15; 
-    
+
     motor_driver.setMotors(speed, -speed);
     eprev = error;
-    Serial.print(" || PID: ");
-    Serial.print(pidSignal);
     Serial.print(" || error: ");
     Serial.print(error);
+    Serial.print(" || rate: ");
+    Serial.print(angularVelocity);
     Serial.print(" || speed: ");
     Serial.print(speed);
-    Serial.print(" || IMU: ");
-    Serial.println(imu.getYaw());
+    Serial.print(" || dt(ms): ");
+    Serial.println(dt * 1000.0f);
 
-    if (fabs(error) < ERROR_TOL) {
+    // Settle only once heading AND rotation rate are both near zero -- otherwise
+    // leftover spin momentum coasts the heading past the target after motors cut.
+    if (fabs(error) < ERROR_TOL && fabs(angularVelocity) < RATE_TOL) {
       stableCount++;
       if (stableCount >= REQUIRED_STABLE) break;
     } else {
