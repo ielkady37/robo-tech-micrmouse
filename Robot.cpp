@@ -6,7 +6,7 @@
 #define MAX_SPEED_FORWARD 65
 
 #define MIN_SPEED_ROT 40
-#define MAX_SPEED_ROT 70
+#define MAX_SPEED_ROT 65
 
 #define MAX_ERROR 90
 #define DEADZONE 0.7
@@ -188,8 +188,8 @@ void Robot::move(int cells) {
 
 
 void Robot::turn(int target) {
-  float kp = 5.9;
-  float kd = 35;
+  float kp = 0.5;
+  float kd = 11;
   int eprev = 0;
   int stableCount = 0;
 
