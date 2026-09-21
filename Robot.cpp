@@ -249,7 +249,8 @@ void Robot::turn(int target) {
       speed = 0;  // deadband zone
     }
     if (fabs(error) > 10.0f) {          // kick only far from target (RD-02)
-      speed += (speed >= 0) ? 15 : -15;  // reinforce current direction, either sign of target
+      int ff = (target > 0) ? 15 : -15; 
+      speed += (speed >= 0) ? ff : -ff;  // reinforce current direction, either sign of target
     }
 
     motor_driver.setMotors(speed, -speed);
