@@ -99,6 +99,7 @@ void Robot::move(int cells) {
 
     int stableCount = 0;
     bool wallDetected = false;
+    int wallCloseCount = 0;
 
     // float startDistance = (motor_driver.getDistanceL() + motor_driver.getDistanceR())/2;
     float startDistance = 0;
@@ -121,10 +122,18 @@ void Robot::move(int cells) {
         // Wall safety stop: redefine the target as "here" so the distance PID
         // decelerates and settles smoothly instead of an abrupt motor cutoff.
         // eprev_dist is reset in the same pass so this isn't seen as a derivative spike.
-        if (!wallDetected && tof.getTofCenter() < 40) {
-          wallDetected = true;
-          desiredDistance = currentDist;
-          eprev_dist = 0;
+        // Require 2 consecutive close readings so one noisy ToF sample can't trip it.
+        if (!wallDetected) {
+          if (tof.getTofCenter() < 40) {
+            wallCloseCount++;
+            if (wallCloseCount >= REQUIRED_STABLE) {
+              wallDetected = true;
+              desiredDistance = currentDist;
+              eprev_dist = 0;
+            }
+          } else {
+            wallCloseCount = 0;
+          }
         }
 
         // --- Distance PID ---
@@ -148,7 +157,13 @@ void Robot::move(int cells) {
         // Clamp to motor limits
         leftSpeed  = constrain(leftSpeed, -MAX_SPEED_FORWARD, MAX_SPEED_FORWARD);
         rightSpeed = constrain(rightSpeed, -MAX_SPEED_FORWARD, MAX_SPEED_FORWARD);
-        
+        if (wallDetected) {
+          // Once stopping for a wall, heading correction may only ease speed toward
+          // zero, never drive a wheel in reverse (that reads as "backing away").
+          leftSpeed  = constrain(leftSpeed, 0.0f, (float)MAX_SPEED_FORWARD);
+          rightSpeed = constrain(rightSpeed, 0.0f, (float)MAX_SPEED_FORWARD);
+        }
+
         if (leftSpeed > 0.7 && leftSpeed <= MIN_SPEED_FORWARD) {
           leftSpeed = MIN_SPEED_FORWARD;
         } else if (leftSpeed < -0.7 && leftSpeed >= -MIN_SPEED_FORWARD) {
@@ -181,7 +196,9 @@ void Robot::move(int cells) {
         Serial.print("|| Lspeed: ");
         Serial.print(leftSpeed);
         Serial.print("|| Rspeed: ");
-        Serial.println(rightSpeed);
+        Serial.print(rightSpeed);
+        Serial.print("|| TofC: ");
+        Serial.println(tof.getTofCenter());
 
         // Exit condition
         if (fabs(error_dist) < ERROR_TOL) {
