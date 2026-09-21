@@ -93,7 +93,7 @@ void TOF::updateReadings() {
   lox3.rangingTest(&measure3, false);  // pass in 'true' to get debug data printout!
 
   if (xSemaphoreTake(left_tof_Mutex, portMAX_DELAY) == pdTRUE) {
-    if (measure3.RangeStatus != 4)
+    if (measure3.RangeStatus == 0)  // VL53L0X_RANGE_VALID -- any other status's distance is meaningless
       leftDistance = measure3.RangeMilliMeter;
     else
       leftDistance = 65535;
@@ -101,7 +101,7 @@ void TOF::updateReadings() {
   }
 
   if (xSemaphoreTake(right_tof_Mutex, portMAX_DELAY) == pdTRUE) {
-    if (measure1.RangeStatus != 4)
+    if (measure1.RangeStatus == 0)
       rightDistance = measure1.RangeMilliMeter;
     else
       rightDistance = 65535;
@@ -109,7 +109,7 @@ void TOF::updateReadings() {
   }
 
   if (xSemaphoreTake(center_tof_Mutex, portMAX_DELAY) == pdTRUE) {
-    if (measure2.RangeStatus != 4)
+    if (measure2.RangeStatus == 0)
       centerDistance = measure2.RangeMilliMeter;
     else
       centerDistance = 65535;
