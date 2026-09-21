@@ -12,8 +12,10 @@
 #define DEADZONE 0.7
 #define CELL_SIZE 18
 const int REQUIRED_STABLE = 2;   // must stay within tolerance 5 times in a row
-const float ERROR_TOL = 0.3;
+const float ERROR_TOL = 0.3;     // degrees, for turn()/snapToCardinal()
 const float RATE_TOL = 10.0;     // deg/s -- must also be near-stationary to call a turn settled
+const float DIST_TOL = 0.7;      // cm, for move(). Must be >= the PWM deadband below, or the
+                                 // motors cut out before the exit condition can ever be met.
 // Preferences prefs;
 
 //Static Variables
@@ -152,9 +154,11 @@ void Robot::move(int cells) {
         float derv_dist  = error_dist - eprev_dist;
         float pid_dist   = kp_dist * error_dist + kd_dist * derv_dist;
 
-        // Clamp forward speed
-        float baseSpeed = constrain(pid_dist, -MAX_SPEED_FORWARD, MAX_SPEED_FORWARD);
-        if (wallDetected) baseSpeed = constrain(baseSpeed, 0.0f, (float)MAX_SPEED_FORWARD);  // never back away from a detected wall
+        // Clamp forward speed. A forward move never drives in reverse: because the
+        // MIN_SPEED_FORWARD floor below snaps any small command up to full speed,
+        // correcting an overshoot backwards turns the approach into a bang-bang
+        // oscillation instead of a settle.
+        float baseSpeed = constrain(pid_dist, 0.0f, (float)MAX_SPEED_FORWARD);
 
         // --- Heading PID ---
         float error_heading = startYaw - currentYaw;
@@ -165,33 +169,22 @@ void Robot::move(int cells) {
         float rightSpeed  = baseSpeed - pid_heading;
         float leftSpeed = baseSpeed + pid_heading;
 
-        // Clamp to motor limits
-        leftSpeed  = constrain(leftSpeed, -MAX_SPEED_FORWARD, MAX_SPEED_FORWARD);
-        rightSpeed = constrain(rightSpeed, -MAX_SPEED_FORWARD, MAX_SPEED_FORWARD);
-        if (wallDetected) {
-          // Once stopping for a wall, heading correction may only ease speed toward
-          // zero, never drive a wheel in reverse (that reads as "backing away").
-          leftSpeed  = constrain(leftSpeed, 0.0f, (float)MAX_SPEED_FORWARD);
-          rightSpeed = constrain(rightSpeed, 0.0f, (float)MAX_SPEED_FORWARD);
-        }
+        // Clamp to motor limits. Heading correction may slow a wheel to a stop but
+        // never reverse it -- a reversed wheel pivots the robot in place instead of
+        // steering it, which is what reads as the robot backing away.
+        leftSpeed  = constrain(leftSpeed, 0.0f, (float)MAX_SPEED_FORWARD);
+        rightSpeed = constrain(rightSpeed, 0.0f, (float)MAX_SPEED_FORWARD);
 
-        if (leftSpeed > 0.7 && leftSpeed <= MIN_SPEED_FORWARD) {
+        if (leftSpeed > DEADZONE && leftSpeed <= MIN_SPEED_FORWARD) {
           leftSpeed = MIN_SPEED_FORWARD;
-        } else if (leftSpeed < -0.7 && leftSpeed >= -MIN_SPEED_FORWARD) {
-          leftSpeed = -MIN_SPEED_FORWARD;
-        } else if (leftSpeed >= -0.7 && leftSpeed <= 0.7) {
+        } else if (leftSpeed <= DEADZONE) {
           leftSpeed = 0;  // deadband zone
         }
-        if (rightSpeed > 0.7 && rightSpeed <= MIN_SPEED_FORWARD) {
+        if (rightSpeed > DEADZONE && rightSpeed <= MIN_SPEED_FORWARD) {
           rightSpeed = MIN_SPEED_FORWARD;
-        } else if (rightSpeed < -0.7 && rightSpeed >= -MIN_SPEED_FORWARD) {
-          rightSpeed = -MIN_SPEED_FORWARD;
-        } else if (rightSpeed >= -0.7 && rightSpeed <= 0.7) {
+        } else if (rightSpeed <= DEADZONE) {
           rightSpeed = 0;  // deadband zone
         }
-        // Apply trimming / deadband if needed
-        if (fabs(leftSpeed) < DEADZONE) leftSpeed = 0;
-        if (fabs(rightSpeed) < DEADZONE) rightSpeed = 0;
 
         motor_driver.setMotors(leftSpeed, rightSpeed);
 
@@ -211,8 +204,11 @@ void Robot::move(int cells) {
         Serial.print("|| TofC: ");
         Serial.println(tof.getTofCenter());
 
-        // Exit condition
-        if (fabs(error_dist) < ERROR_TOL) {
+        // Done once the target is reached or passed. Testing the signed error (not
+        // fabs) means an overshoot ends the move instead of provoking a reverse
+        // correction, and DIST_TOL >= DEADZONE guarantees the band is reachable
+        // while the motors are still allowed to run.
+        if (error_dist <= DIST_TOL) {
             stableCount++;
             if (stableCount >= REQUIRED_STABLE) break;
         } else {
