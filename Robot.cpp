@@ -45,22 +45,32 @@ void Robot::begin() {
   delay(5000);  // Stabilize
 }
 
+// 0 means "no reading yet" (sensor cache starts at 0 before the first ranging
+// pass) and 65535 is Tof.cpp's sentinel for an invalid/failed reading -- neither
+// is a real distance, so treat both as "no data" rather than "wall right here".
+static bool isValidTofReading(uint16_t d) {
+  return d != 0 && d != 65535;
+}
+
 bool Robot::isWallFront() {
-  if (tof.getTofCenter() <= THRESHOLD_FRONT) {
+  uint16_t d = tof.getTofCenter();
+  if (isValidTofReading(d) && d <= THRESHOLD_FRONT) {
     return true;
   }
   return false;
 }
 
 bool Robot::isWallLeft() {
-  if (tof.getTofLeft() <= THRESHOLD_SIDE) {
+  uint16_t d = tof.getTofLeft();
+  if (isValidTofReading(d) && d <= THRESHOLD_SIDE) {
     return true;
   }
   return false;
 }
 
 bool Robot::isWallRight() {
-  if (tof.getTofRight() <= THRESHOLD_SIDE) {
+  uint16_t d = tof.getTofRight();
+  if (isValidTofReading(d) && d <= THRESHOLD_SIDE) {
     return true;
   }
   return false;
@@ -124,7 +134,8 @@ void Robot::move(int cells) {
         // eprev_dist is reset in the same pass so this isn't seen as a derivative spike.
         // Require 2 consecutive close readings so one noisy ToF sample can't trip it.
         if (!wallDetected) {
-          if (tof.getTofCenter() < 40) {
+          uint16_t tofC = tof.getTofCenter();
+          if (isValidTofReading(tofC) && tofC < 40) {
             wallCloseCount++;
             if (wallCloseCount >= REQUIRED_STABLE) {
               wallDetected = true;
