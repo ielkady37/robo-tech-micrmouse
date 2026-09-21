@@ -91,7 +91,7 @@ void Robot::move(int cells) {
 
     // Heading PID
     float kp_heading = 2;
-    float kd_heading = 0.5;
+    float kd_heading = 0.05;  // dt-normalized (deg/s) derivative gain -- re-tune on hardware
 
     float eprev_dist = 0;
     float eprev_heading = 0;
@@ -104,11 +104,17 @@ void Robot::move(int cells) {
 
     imu.update();
     float startYaw = -imu.getYaw();   // record initial heading
+    unsigned long lastTime = micros();
     while (true) {
         // --- Update sensors ---
         imu.update();
         float currentDist =(motor_driver.getDistanceL() + motor_driver.getDistanceR())/2;
         float currentYaw  = -imu.getYaw();
+
+        unsigned long now = micros();
+        float dt = (now - lastTime) / 1000000.0f;
+        lastTime = now;
+        if (dt <= 0) dt = 0.001f;  // guard against a zero/degenerate sample
 
         // --- Distance PID ---
         float error_dist = desiredDistance - currentDist;
@@ -120,18 +126,12 @@ void Robot::move(int cells) {
 
         // --- Heading PID ---
         float error_heading = startYaw - currentYaw;
-        float derv_heading  = error_heading - eprev_heading;
+        float derv_heading  = (error_heading - eprev_heading) / dt;  // deg/s
         float pid_heading   = constrain(kp_heading * error_heading + kd_heading * derv_heading,-MAX_SPEED_ROT, MAX_SPEED_ROT);
-        // if (pid_heading > 0.7 && pid_heading <= MIN_SPEED_ROT) {
-        //   pid_heading = MIN_SPEED_ROT;
-        // } else if (pid_heading < -0.7 && pid_heading >= -MIN_SPEED_ROT) {
-        //   pid_heading = -MIN_SPEED_ROT;
-        // } else if (pid_heading >= -0.7 && pid_heading <= 0.7) {
-        //   pid_heading = 0;  // deadband zone
-        // }
+
         // Mix heading correction into motor speeds
-        float rightSpeed  = baseSpeed - pid_heading*0;
-        float leftSpeed = baseSpeed + pid_heading*0;
+        float rightSpeed  = baseSpeed - pid_heading;
+        float leftSpeed = baseSpeed + pid_heading;
 
         // Clamp to motor limits
         leftSpeed  = constrain(leftSpeed, -MAX_SPEED_FORWARD, MAX_SPEED_FORWARD);
@@ -162,14 +162,14 @@ void Robot::move(int cells) {
         eprev_heading = error_heading;
 
         // Debug
-        // Serial.print("|| DistErr: ");
-        // Serial.println(error_dist);
-        // Serial.print("|| current: ");
-        // Serial.println(currentDist);
-        // Serial.print("|| Lspeed: ");
-        // Serial.print(leftSpeed);
-        // Serial.print("|| Rspeed: ");
-        // Serial.println(rightSpeed);
+        Serial.print("|| DistErr: ");
+        Serial.print(error_dist);
+        Serial.print("|| HeadErr: ");
+        Serial.print(error_heading);
+        Serial.print("|| Lspeed: ");
+        Serial.print(leftSpeed);
+        Serial.print("|| Rspeed: ");
+        Serial.println(rightSpeed);
 
         // Exit condition
         if(tof.getTofCenter() < 40)break;
