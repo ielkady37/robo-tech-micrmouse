@@ -4,14 +4,14 @@
 
 Structural improvements proposed from the design review: layering, seams, naming, and guardrails. Unlike the defect sections above, these items reshape what the codebase *is*; several unblock the testing and simulation work the defects depend on.
 
-| ID | Priority | Item |
-|---|---|---|
-| [RD-35](rd-35-hardware-abstraction-layer.md) | P1 High | Hardware abstraction layer: sensor & actuator interfaces |
-| [RD-36](rd-36-environment-seam-sim-real.md) | P1 High | Environment seam: simulator ↔ real hardware via `IMazeEnvironment` |
-| [RD-37](rd-37-application-services-navigator.md) | P2 Medium | Application services layer: `Navigator` + domain model (`MazeMap`, `Pose`) |
-| [RD-38](rd-38-solver-strategy-seam.md) | P2 Medium | Algorithm strategy seam: pluggable `IMazeSolver` (A* and alternatives) |
-| [RD-39](rd-39-domain-rename-taxonomy.md) | P3 Low | Domain-specific rename taxonomy (`API`/`Robot` out, maze language in) |
-| [RD-40](rd-40-layer-dependency-enforcement.md) | P3 Low | Layer dependency enforcement (keep the layers honest) |
+| ID | Priority | Infra | Item |
+|---|---|---|---|
+| [RD-35](rd-35-hardware-abstraction-layer.md) | P1 High | Agnostic | Hardware abstraction layer: sensor & actuator interfaces |
+| [RD-36](rd-36-environment-seam-sim-real.md) | P1 High | Agnostic | Environment seam: simulator ↔ real hardware via `IMazeEnvironment` |
+| [RD-37](rd-37-application-services-navigator.md) | P2 Medium | Agnostic | Application services layer: `Navigator` + domain model (`MazeMap`, `Pose`) |
+| [RD-38](rd-38-solver-strategy-seam.md) | P2 Medium | Agnostic | Algorithm strategy seam: pluggable `IMazeSolver` (A* and alternatives) |
+| [RD-39](rd-39-domain-rename-taxonomy.md) | P3 Low | Agnostic | Domain-specific rename taxonomy (`API`/`Robot` out, maze language in) |
+| [RD-40](rd-40-layer-dependency-enforcement.md) | P3 Low | Agnostic | Layer dependency enforcement (keep the layers honest) |
 
 ## Sequencing
 
