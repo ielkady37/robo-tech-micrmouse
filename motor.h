@@ -29,6 +29,8 @@ class MotorDriver {
     static volatile int posi;
     static volatile int posiR;
     void setMotors(int16_t leftSpeed, int16_t rightSpeed);
+    void brake();
+    void activeBrake();
 
   private:
   portMUX_TYPE posiMutex;
