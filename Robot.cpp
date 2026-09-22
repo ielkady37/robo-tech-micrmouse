@@ -282,16 +282,16 @@ void Robot::move(int cells) {
         eprev_heading = error_heading;
 
         // Debug
-        Serial.print("|| DistErr: ");
-        Serial.print(error_dist);
-        Serial.print("|| HeadErr: ");
-        Serial.print(error_heading);
-        Serial.print("|| Lspeed: ");
-        Serial.print(leftSpeed);
-        Serial.print("|| Rspeed: ");
-        Serial.print(rightSpeed);
-        Serial.print("|| TofC: ");
-        Serial.println(tof.getTofCenter());
+        // Serial.print("|| DistErr: ");
+        // Serial.print(error_dist);
+        // Serial.print("|| HeadErr: ");
+        // Serial.print(error_heading);
+        // Serial.print("|| Lspeed: ");
+        // Serial.print(leftSpeed);
+        // Serial.print("|| Rspeed: ");
+        // Serial.print(rightSpeed);
+        // Serial.print("|| TofC: ");
+        // Serial.println(tof.getTofCenter());
 
         // Done once the target is reached or passed. Testing the signed error (not
         // fabs) means an overshoot ends the move instead of provoking a reverse
