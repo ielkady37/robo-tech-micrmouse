@@ -78,7 +78,7 @@ void setup() {
 
 void loop() {
   floodFill(api);
-  // api.printSensors();
+  api.printSensors();
   // Serial.print("|| Front Wall: ");
   // Serial.print(api.wallFront());
   // Serial.print("|| Right Wall: ");

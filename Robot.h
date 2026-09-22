@@ -7,7 +7,7 @@
 #include "Tof.h"
 
 #define THRESHOLD_SIDE 170
-#define THRESHOLD_FRONT 100
+#define THRESHOLD_FRONT 130
 
 
 class Robot {
