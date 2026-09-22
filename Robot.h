@@ -30,6 +30,10 @@ private:
   static IMU imu;
   static MotorDriver motor_driver;
 
+  // Multiplies every speed limit to compensate a draining battery. Session state
+  // on purpose: saving it would carry a drained-pack value into a charged run.
+  static float speedScale;
+
   static void update(void * parameters);  // An infinite loop for upadting all sensors
   float heading;
 };
