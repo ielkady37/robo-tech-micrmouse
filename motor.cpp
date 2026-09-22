@@ -3,7 +3,7 @@
 #include <Arduino.h>
 #include <stdint.h>
 
-#define TICKS_PER_REV 60
+#define TICKS_PER_REV 58
 #define WHEEL_DIA 4
 
 // Active brake tuning

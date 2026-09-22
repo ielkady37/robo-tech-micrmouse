@@ -403,14 +403,14 @@ void Robot::turn(int target) {
     }
 
     eprev = error;
-    Serial.print(" || error: ");
-    Serial.print(error);
-    Serial.print(" || rate: ");
-    Serial.print(angularVelocity);
-    Serial.print(" || speed: ");
-    Serial.print(speed);
-    Serial.print(" || dt(ms): ");
-    Serial.println(dt * 1000.0f);
+    // Serial.print(" || error: ");
+    // Serial.print(error);
+    // Serial.print(" || rate: ");
+    // Serial.print(angularVelocity);
+    // Serial.print(" || speed: ");
+    // Serial.print(speed);
+    // Serial.print(" || dt(ms): ");
+    // Serial.println(dt * 1000.0f);
 
     // Settle only once heading AND rotation rate are both near zero -- otherwise
     // leftover spin momentum coasts the heading past the target after motors cut.
