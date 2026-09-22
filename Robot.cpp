@@ -11,6 +11,7 @@
 #define MAX_ERROR 90
 #define DEADZONE 0.7
 #define CELL_SIZE 18
+#define BRAKE_MS 120  // how long to hold the short-circuit brake before releasing
 const int REQUIRED_STABLE = 2;   // must stay within tolerance 5 times in a row
 const float ERROR_TOL = 0.3;     // degrees, for turn()/snapToCardinal()
 const float RATE_TOL = 10.0;     // deg/s -- must also be near-stationary to call a turn settled
@@ -18,10 +19,67 @@ const float DIST_TOL = 0.7;      // cm, for move(). Must be >= the PWM deadband 
                                  // motors cut out before the exit condition can ever be met.
 // Preferences prefs;
 
+// --- Low-battery stall compensation ---
+// Motor torque follows duty x voltage, so a PWM floor tuned on a full pack stops
+// overcoming stiction as the battery drains and the robot sticks. speedScale lifts
+// the whole band (both mins and both maxes) until the wheels turn again, then
+// decays back down so a recharged pack isn't driven at drained-pack speeds.
+#define SPEED_SCALE_STEP  0.1f
+#define SPEED_SCALE_MAX   2.0f
+#define SPEED_SCALE_DECAY 0.02f
+#define STALL_SAMPLE_MS   50    // how often to compare tick counts
+#define STALL_CONFIRM_MS  200   // motionless this long while driving = stalled
+#define STALL_GIVEUP_MS   2000  // stalled this long at max scale = physically blocked
+
+struct StallMonitor {
+  int lastPosL;
+  int lastPosR;
+  unsigned long lastSampleMs;
+  unsigned long stalledSinceMs;  // 0 while the wheels are turning
+
+  void begin(int posL, int posR, unsigned long nowMs) {
+    lastPosL = posL;
+    lastPosR = posR;
+    lastSampleMs = nowMs;
+    stalledSinceMs = 0;
+  }
+
+  // True on every sample where the wheels have been driven but motionless for
+  // longer than STALL_CONFIRM_MS. Per-wheel absolute deltas matter: during a turn
+  // the two counters move opposite ways and a plain sum would cancel to zero.
+  bool sample(int posL, int posR, bool commandingMotion, unsigned long nowMs) {
+    if (!commandingMotion) {
+      begin(posL, posR, nowMs);
+      return false;
+    }
+    if (nowMs - lastSampleMs < STALL_SAMPLE_MS) return false;
+
+    long dL = (long)posL - lastPosL;
+    long dR = (long)posR - lastPosR;
+    if (dL < 0) dL = -dL;
+    if (dR < 0) dR = -dR;
+    lastPosL = posL;
+    lastPosR = posR;
+    lastSampleMs = nowMs;
+
+    if (dL + dR > 0) {  // any tick at all means it is still turning
+      stalledSinceMs = 0;
+      return false;
+    }
+    if (stalledSinceMs == 0) stalledSinceMs = nowMs;
+    return (nowMs - stalledSinceMs) >= STALL_CONFIRM_MS;
+  }
+
+  bool blocked(unsigned long nowMs) const {
+    return stalledSinceMs != 0 && (nowMs - stalledSinceMs) >= STALL_GIVEUP_MS;
+  }
+};
+
 //Static Variables
 TOF Robot::tof;
 IMU Robot::imu;
 MotorDriver Robot::motor_driver;
+float Robot::speedScale = 1.0f;
 
 
 void Robot::begin() {
@@ -120,6 +178,11 @@ void Robot::move(int cells) {
     imu.update();
     float startYaw = -imu.getYaw();   // record initial heading
     unsigned long lastTime = micros();
+
+    StallMonitor stall;
+    stall.begin(motor_driver.getPosL(), motor_driver.getPosR(), millis());
+    bool stalledThisMove = false;
+
     while (true) {
         // --- Update sensors ---
         imu.update();
@@ -154,11 +217,15 @@ void Robot::move(int cells) {
         float derv_dist  = error_dist - eprev_dist;
         float pid_dist   = kp_dist * error_dist + kd_dist * derv_dist;
 
+        // Speed band, lifted by whatever the battery currently needs.
+        float minFwd = MIN_SPEED_FORWARD * speedScale;
+        float maxFwd = MAX_SPEED_FORWARD * speedScale;
+
         // Clamp forward speed. A forward move never drives in reverse: because the
-        // MIN_SPEED_FORWARD floor below snaps any small command up to full speed,
-        // correcting an overshoot backwards turns the approach into a bang-bang
-        // oscillation instead of a settle.
-        float baseSpeed = constrain(pid_dist, 0.0f, (float)MAX_SPEED_FORWARD);
+        // minFwd floor below snaps any small command up to full speed, correcting
+        // an overshoot backwards turns the approach into a bang-bang oscillation
+        // instead of a settle.
+        float baseSpeed = constrain(pid_dist, 0.0f, maxFwd);
 
         // --- Heading PID ---
         float error_heading = startYaw - currentYaw;
@@ -172,21 +239,43 @@ void Robot::move(int cells) {
         // Clamp to motor limits. Heading correction may slow a wheel to a stop but
         // never reverse it -- a reversed wheel pivots the robot in place instead of
         // steering it, which is what reads as the robot backing away.
-        leftSpeed  = constrain(leftSpeed, 0.0f, (float)MAX_SPEED_FORWARD);
-        rightSpeed = constrain(rightSpeed, 0.0f, (float)MAX_SPEED_FORWARD);
+        leftSpeed  = constrain(leftSpeed, 0.0f, maxFwd);
+        rightSpeed = constrain(rightSpeed, 0.0f, maxFwd);
 
-        if (leftSpeed > DEADZONE && leftSpeed <= MIN_SPEED_FORWARD) {
-          leftSpeed = MIN_SPEED_FORWARD;
+        if (leftSpeed > DEADZONE && leftSpeed <= minFwd) {
+          leftSpeed = minFwd;
         } else if (leftSpeed <= DEADZONE) {
           leftSpeed = 0;  // deadband zone
         }
-        if (rightSpeed > DEADZONE && rightSpeed <= MIN_SPEED_FORWARD) {
-          rightSpeed = MIN_SPEED_FORWARD;
+        if (rightSpeed > DEADZONE && rightSpeed <= minFwd) {
+          rightSpeed = minFwd;
         } else if (rightSpeed <= DEADZONE) {
           rightSpeed = 0;  // deadband zone
         }
 
         motor_driver.setMotors(leftSpeed, rightSpeed);
+
+        // Driving but not turning means the battery can no longer overcome stiction
+        // at this PWM floor -- lift the band until the wheels break free.
+        unsigned long nowMs = millis();
+        bool commandingMotion = (leftSpeed > 0) || (rightSpeed > 0);
+        if (stall.sample(motor_driver.getPosL(), motor_driver.getPosR(), commandingMotion, nowMs)) {
+          stalledThisMove = true;
+          if (speedScale < SPEED_SCALE_MAX) {
+            speedScale += SPEED_SCALE_STEP;
+            if (speedScale > SPEED_SCALE_MAX) speedScale = SPEED_SCALE_MAX;
+            Serial.print("|| STALL -> speedScale: ");
+            Serial.println(speedScale);
+          } else if (stall.blocked(nowMs)) {
+            // Already at full scale and still motionless: this is a jam, not a weak
+            // pack. Pushing harder only heats the motors and browns out the board.
+            Serial.println("|| BLOCKED -- aborting move");
+            motor_driver.setMotors(0, 0);
+            motor_driver.resetEncoderL();
+            motor_driver.resetEncoderR();
+            return;
+          }
+        }
 
         // Save errors
         eprev_dist    = error_dist;
@@ -215,10 +304,26 @@ void Robot::move(int cells) {
             stableCount = 0;
         }
     }
+
+    // Brake rather than coast. Simply switching the motors off free-wheels the
+    // robot past the target; the active brake drives against the remaining
+    // momentum until the encoders show the wheels have actually stopped.
+    motor_driver.activeBrake();
+    delay(BRAKE_MS);
+    motor_driver.setMotors(0, 0);  // release the short once the wheels are stopped
+
+    // Clean run: ease the scale back down so a recharged pack is not driven at
+    // the speeds a drained one needed.
+    if (!stalledThisMove && speedScale > 1.0f) {
+      speedScale -= SPEED_SCALE_DECAY;
+      if (speedScale < 1.0f) speedScale = 1.0f;
+    }
+
+    // Reset after the wheels are actually stopped, so coast-down ticks are not
+    // counted into the next move's baseline.
     motor_driver.resetEncoderL();
     motor_driver.resetEncoderR();
-    motor_driver.setMotors(0, 0);
-    delay(750);
+    delay(750 - BRAKE_MS);
 }
 
 
@@ -241,6 +346,10 @@ void Robot::turn(int target) {
 
   unsigned long lastTime = micros();
 
+  StallMonitor stall;
+  stall.begin(motor_driver.getPosL(), motor_driver.getPosR(), millis());
+  bool stalledThisTurn = false;
+
   motor_driver.setMotors(0, 0);
   while (true) {
     imu.update();
@@ -257,20 +366,42 @@ void Robot::turn(int target) {
     angularVelocity = -derv;      // deg/s, actual turn rate
     pidSignal = kp * error + kd * derv;
 
+    // Speed band, lifted by whatever the battery currently needs.
+    float minRot = MIN_SPEED_ROT * speedScale;
+    float maxRot = MAX_SPEED_ROT * speedScale;
+
     // Scale PID output into motor speed range
-    speed = (pidSignal / (kp * MAX_ERROR)) * MAX_SPEED_ROT;
-    speed = constrain(speed, -MAX_SPEED_ROT, MAX_SPEED_ROT);
+    speed = (pidSignal / (kp * MAX_ERROR)) * maxRot;
+    speed = constrain(speed, -maxRot, maxRot);
 
     // --- Trimming logic ---
-    if (speed > 0.7 && speed <= MIN_SPEED_ROT) {
-      speed = MIN_SPEED_ROT;
-    } else if (speed < -0.7 && speed >= -MIN_SPEED_ROT) {
-      speed = -MIN_SPEED_ROT;
+    if (speed > 0.7 && speed <= minRot) {
+      speed = minRot;
+    } else if (speed < -0.7 && speed >= -minRot) {
+      speed = -minRot;
     } else if (speed >= -0.7 && speed <= 0.7) {
       speed = 0;  // deadband zone
     }
 
     motor_driver.setMotors(speed, -speed);
+
+    // Same stall compensation as move(): spinning the wheels with no tick change
+    // means the pack can't break stiction at this floor.
+    unsigned long nowMs = millis();
+    if (stall.sample(motor_driver.getPosL(), motor_driver.getPosR(), speed != 0, nowMs)) {
+      stalledThisTurn = true;
+      if (speedScale < SPEED_SCALE_MAX) {
+        speedScale += SPEED_SCALE_STEP;
+        if (speedScale > SPEED_SCALE_MAX) speedScale = SPEED_SCALE_MAX;
+        Serial.print(" || STALL -> speedScale: ");
+        Serial.println(speedScale);
+      } else if (stall.blocked(nowMs)) {
+        Serial.println(" || BLOCKED -- aborting turn");
+        motor_driver.setMotors(0, 0);
+        return;
+      }
+    }
+
     eprev = error;
     Serial.print(" || error: ");
     Serial.print(error);
@@ -289,6 +420,11 @@ void Robot::turn(int target) {
     } else {
       stableCount = 0;
     }
+  }
+
+  if (!stalledThisTurn && speedScale > 1.0f) {
+    speedScale -= SPEED_SCALE_DECAY;
+    if (speedScale < 1.0f) speedScale = 1.0f;
   }
 
   motor_driver.setMotors(0, 0);
