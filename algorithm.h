@@ -9,7 +9,7 @@ void turn(Direction targetDirection, API api);
 bool isWallInDirection(Direction direction, API api);
 void moveInDirection(Direction direction, API api);
 void updateDistancesAStar(bool returning, API api);
-Direction getNextMovement(uint8_t currentRow, uint8_t currentCol, bool returning, API api);
+bool getNextMovement(uint8_t currentRow, uint8_t currentCol, bool returning, API api, Direction& outDirection);
 void floodFill(API api);
 void loadMatrix();
 void eraseMatrix();

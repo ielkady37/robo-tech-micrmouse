@@ -64,7 +64,7 @@
 
 #include "API.h"
 #include "algorithm.h"
-int solveSwitch = 23;
+int solveSwitch = 23; //yarab mnsash a8irha
 API api;
 void setup() {
   pinMode(solveSwitch,INPUT_PULLUP);
@@ -78,7 +78,7 @@ void setup() {
 
 void loop() {
   floodFill(api);
-  api.printSensors();
+  // api.printSensors();
   // Serial.print("|| Front Wall: ");
   // Serial.print(api.wallFront());
   // Serial.print("|| Right Wall: ");

@@ -3,8 +3,8 @@
 #include <string>
 #include "Robot.h"
 
-#define MAZE_WIDTH 16 //Should be 16 in real thing
-#define MAZE_LENGTH 16 //Should be 16 in real thing
+#define MAZE_WIDTH 8 //Should be 16 in real thing
+#define MAZE_LENGTH 8 //Should be 16 in real thing
 
 
 // Add the Direction enum at the top
