@@ -18,6 +18,7 @@ public:
   bool isWallFront();
   bool isWallLeft();
   bool isWallRight();
+  // Motion commands stop and return on a no-motion timeout, allowing the next command.
   void move(int cells);  // The function were the distance PID code and the align to zero codes are supposed to be
   void turn(int target);   // The function were the align to a specific angle is supposed to be
   // void moveWithHeading(int target);
