@@ -252,32 +252,43 @@ void updateDistancesAStar(bool returning, API api) {
   }
 }
 
-Direction getNextMovement(uint8_t currentRow, uint8_t currentCol, bool returning, API api) {
+bool getNextMovement(uint8_t currentRow, uint8_t currentCol, bool returning, API api, Direction& outDirection) {
   uint8_t minDistance = distance[currentRow][currentCol];
   Direction bestDirection = NORTH;
+  bool foundBetter = false;
 
-  // Check all possible moves
-  if (currentRow < MAZE_LENGTH - 1 && !hasNorthWall[currentRow][currentCol] && distance[currentRow + 1][currentCol] <= minDistance) {
+  // Check all possible moves. Only a strictly smaller neighbor distance counts
+  // as an improvement, so a trapped cell (no improving neighbor) is reported
+  // instead of silently defaulting to NORTH, and equal-distance neighbors
+  // can no longer cause back-and-forth oscillation.
+  if (currentRow < MAZE_LENGTH - 1 && !hasNorthWall[currentRow][currentCol] && distance[currentRow + 1][currentCol] < minDistance) {
     minDistance = distance[currentRow + 1][currentCol];
     bestDirection = NORTH;
+    foundBetter = true;
   }
 
-  if (currentRow > 0 && !hasNorthWall[currentRow - 1][currentCol] && distance[currentRow - 1][currentCol] <= minDistance) {
+  if (currentRow > 0 && !hasNorthWall[currentRow - 1][currentCol] && distance[currentRow - 1][currentCol] < minDistance) {
     minDistance = distance[currentRow - 1][currentCol];
     bestDirection = SOUTH;
+    foundBetter = true;
   }
 
-  if (currentCol < MAZE_WIDTH - 1 && !hasEastWall[currentRow][currentCol] && distance[currentRow][currentCol + 1] <= minDistance) {
+  if (currentCol < MAZE_WIDTH - 1 && !hasEastWall[currentRow][currentCol] && distance[currentRow][currentCol + 1] < minDistance) {
     minDistance = distance[currentRow][currentCol + 1];
     bestDirection = EAST;
+    foundBetter = true;
   }
 
-  if (currentCol > 0 && !hasEastWall[currentRow][currentCol - 1] && distance[currentRow][currentCol - 1] <= minDistance) {
+  if (currentCol > 0 && !hasEastWall[currentRow][currentCol - 1] && distance[currentRow][currentCol - 1] < minDistance) {
     minDistance = distance[currentRow][currentCol - 1];
     bestDirection = WEST;
+    foundBetter = true;
   }
 
-  return bestDirection;
+  if (foundBetter) {
+    outDirection = bestDirection;
+  }
+  return foundBetter;
 }
 
 // void logDirection(Direction d) {
@@ -321,7 +332,25 @@ void floodFill(API api) {
       updateDistancesAStar(returning, api);
     }
 
-    Direction nextDirection = getNextMovement(currentRow, currentCol, returning, api);
+    Direction nextDirection;
+    bool foundMove = getNextMovement(currentRow, currentCol, returning, api, nextDirection);
+    if (!foundMove) {
+      Serial.print("STUCK at cell: ");
+      Serial.print(currentRow);
+      Serial.print(", ");
+      Serial.println(currentCol);
+      Serial.print("North wall: ");
+      Serial.print(hasNorthWall[currentRow][currentCol]);
+      Serial.print(" South wall: ");
+      Serial.print(currentRow > 0 ? hasNorthWall[currentRow - 1][currentCol] : true);
+      Serial.print(" East wall: ");
+      Serial.print(hasEastWall[currentRow][currentCol]);
+      Serial.print(" West wall: ");
+      Serial.println(currentCol > 0 ? hasEastWall[currentRow][currentCol - 1] : true);
+      delay(500);
+      return;
+    }
+
     // logDirection(nextDirection);
     Serial.print("Going ");
     if (nextDirection == NORTH) {
