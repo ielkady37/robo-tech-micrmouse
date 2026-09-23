@@ -22,50 +22,35 @@ const float DIST_TOL = 0.7;      // cm, for move(). Must be >= the PWM deadband 
 
 // --- Stall detection ---
 #define STALL_SAMPLE_MS   50    // how often to compare tick counts
-#define STALL_CONFIRM_MS  200   // motionless this long while driving = stalled
-#define STALL_GIVEUP_MS   2000  // abort after this long without wheel motion
+#define MOTION_TIMEOUT_MS 2000  // skip the current move/turn after this long without encoder motion
 
 struct StallMonitor {
   int lastPosL;
   int lastPosR;
   unsigned long lastSampleMs;
-  unsigned long stalledSinceMs;  // 0 while the wheels are turning
+  unsigned long lastMotionMs;
 
   void begin(int posL, int posR, unsigned long nowMs) {
     lastPosL = posL;
     lastPosR = posR;
     lastSampleMs = nowMs;
-    stalledSinceMs = 0;
+    lastMotionMs = nowMs;
   }
 
-  // True on every sample where the wheels have been driven but motionless for
-  // longer than STALL_CONFIRM_MS. Per-wheel absolute deltas matter: during a turn
-  // the two counters move opposite ways and a plain sum would cancel to zero.
-  bool sample(int posL, int posR, bool commandingMotion, unsigned long nowMs) {
-    if (!commandingMotion) {
-      begin(posL, posR, nowMs);
-      return false;
-    }
+  // Track encoder motion even when the PID commands zero: an unfinished motion
+  // can otherwise wait forever in the deadband. Check each encoder separately
+  // because the counters move in opposite directions during a turn.
+  bool timedOut(int posL, int posR, unsigned long nowMs) {
     if (nowMs - lastSampleMs < STALL_SAMPLE_MS) return false;
 
-    long dL = (long)posL - lastPosL;
-    long dR = (long)posR - lastPosR;
-    if (dL < 0) dL = -dL;
-    if (dR < 0) dR = -dR;
+    if (posL != lastPosL || posR != lastPosR) {
+      lastMotionMs = nowMs;
+    }
     lastPosL = posL;
     lastPosR = posR;
     lastSampleMs = nowMs;
 
-    if (dL + dR > 0) {  // any tick at all means it is still turning
-      stalledSinceMs = 0;
-      return false;
-    }
-    if (stalledSinceMs == 0) stalledSinceMs = nowMs;
-    return (nowMs - stalledSinceMs) >= STALL_CONFIRM_MS;
-  }
-
-  bool blocked(unsigned long nowMs) const {
-    return stalledSinceMs != 0 && (nowMs - stalledSinceMs) >= STALL_GIVEUP_MS;
+    return (nowMs - lastMotionMs) >= MOTION_TIMEOUT_MS;
   }
 };
 
@@ -243,13 +228,10 @@ void Robot::move(int cells) {
 
         motor_driver.setMotors(leftSpeed, rightSpeed);
 
-        // Stop if the wheels remain motionless while commanded to move.
-        unsigned long nowMs = millis();
-        bool commandingMotion = (leftSpeed > 0) || (rightSpeed > 0);
-        if (stall.sample(motor_driver.getPosL(), motor_driver.getPosR(), commandingMotion, nowMs) &&
-            stall.blocked(nowMs)) {
-          Serial.println("|| BLOCKED -- aborting move");
+        // End this command on timeout so the caller can issue the next motion.
+        if (stall.timedOut(motor_driver.getPosL(), motor_driver.getPosR(), millis())) {
           motor_driver.setMotors(0, 0);
+          Serial.println("|| NO MOTION TIMEOUT -- skipping move");
           motor_driver.resetEncoderL();
           motor_driver.resetEncoderR();
           return;
@@ -351,12 +333,10 @@ void Robot::turn(int target) {
 
     motor_driver.setMotors(speed, -speed);
 
-    // Stop if the wheels remain motionless while commanded to turn.
-    unsigned long nowMs = millis();
-    if (stall.sample(motor_driver.getPosL(), motor_driver.getPosR(), speed != 0, nowMs) &&
-        stall.blocked(nowMs)) {
-      Serial.println(" || BLOCKED -- aborting turn");
+    // End this command on timeout so the caller can issue the next motion.
+    if (stall.timedOut(motor_driver.getPosL(), motor_driver.getPosR(), millis())) {
       motor_driver.setMotors(0, 0);
+      Serial.println(" || NO MOTION TIMEOUT -- skipping turn");
       return;
     }
 
