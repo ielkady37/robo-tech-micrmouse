@@ -13,16 +13,30 @@
 #define DEADZONE 0.7
 #define CELL_SIZE 18
 #define BRAKE_MS 120  // how long to hold the short-circuit brake before releasing
-const int REQUIRED_STABLE = 2;   // must stay within tolerance 5 times in a row
-const float ERROR_TOL = 0.3;     // degrees, for turn()/snapToCardinal()
-const float RATE_TOL = 10.0;     // deg/s -- must also be near-stationary to call a turn settled
+const int REQUIRED_STABLE = 2;  // distance / front-wall confirmation
+const int TURN_STABLE_SAMPLES = 5;
+const float ERROR_TOL = 1.0f;   // degrees
+const float RATE_TOL = 5.0f;    // deg/s
 const float DIST_TOL = 0.7;      // cm, for move(). Must be >= the PWM deadband below, or the
                                  // motors cut out before the exit condition can ever be met.
 // Preferences prefs;
 
 // --- Stall detection ---
 #define STALL_SAMPLE_MS   50    // how often to compare tick counts
-#define MOTION_TIMEOUT_MS 2000  // skip the current move/turn after this long without encoder motion
+#define MOTION_TIMEOUT_MS 2000  // recover after this long without encoder motion
+#define IMU_TIMEOUT_MS IMU::STREAM_TIMEOUT_MS
+#define IMU_STARTUP_TIMEOUT_MS (IMU::CALIBRATION_MS + 2000)
+#define TURN_TIMEOUT_MS 3000   // per 90 degrees, minimum one interval
+#define TURN_SETTLE_US 50000   // stable for at least 50 ms of measurement time
+#define TURN_FINE_ANGLE 10.0f
+#define TURN_PULSE_MS 20
+#define TURN_PULSE_BRAKE_MS 40
+#define TURN_RATE_FILTER_SEC 0.04f
+
+// One bounded recovery attempt before continuing to the next motion.
+#define RECOVERY_BACKUP_CM 4.0f
+#define RECOVERY_BACKUP_TIMEOUT_MS 1000
+#define RECOVERY_ALIGN_TIMEOUT_MS 3000
 
 struct StallMonitor {
   int lastPosL;
@@ -58,9 +72,13 @@ struct StallMonitor {
 TOF Robot::tof;
 IMU Robot::imu;
 MotorDriver Robot::motor_driver;
+float Robot::intendedHeading = 0;
+bool Robot::imuFaultReported = false;
 
 
 void Robot::begin() {
+  intendedHeading = 0;  // IMU calibration defines the initial maze north.
+  imuFaultReported = false;
   tof.begin();
   if (!imu.begin()) {
     Serial.println("IMU failed to initialize");
@@ -80,7 +98,16 @@ void Robot::begin() {
     NULL,                // Task Handle
     0                    // Core 0
   );
-  delay(5000);  // Stabilize
+  Serial.println("Waiting for IMU calibration and first heading...");
+  IMUReading reading;
+  while (!waitForFreshImu(reading)) {
+    // No navigation starts until a calibrated report actually arrives. A late
+    // report can release this wait; there is no latched startup failure.
+    Serial.println("IMU not ready yet -- waiting for calibrated reports");
+    delay(50);
+  }
+  motor_driver.setMotors(0, 0);
+  Serial.println("IMU ready");
 }
 
 // 0 means "no reading yet" (sensor cache starts at 0 before the first ranging
@@ -113,23 +140,119 @@ bool Robot::isWallRight() {
   }
   return false;
 }
-void Robot::snapToCardinal() {
-  imu.update();
-  float currentYaw = -imu.getYaw();  // use your convention
+static bool isFreshImu(const IMUReading& reading, uint32_t nowMs) {
+  return reading.valid && !reading.calibrating && isfinite(reading.yaw) &&
+         uint32_t(nowMs - reading.receivedMs) < IMU_TIMEOUT_MS;
+}
 
-  // Find nearest multiple of 90
-  int nearestCardinal = round(currentYaw / 90.0) * 90;
+bool Robot::isImuReady() {
+  return isFreshImu(imu.getReading(), millis());
+}
 
-  // Compute difference
-  float error = nearestCardinal - currentYaw;
-
-  // Use your turn function with PID to correct heading
-  if (fabs(error) > ERROR_TOL) {
-    turn(error);  // reuse your turn() that accepts relative target
+bool Robot::waitForFreshImu(IMUReading& reading) {
+  motor_driver.brake();
+  reading = imu.getReading();
+  unsigned long timeoutMs = reading.calibrating ? IMU_STARTUP_TIMEOUT_MS : IMU_TIMEOUT_MS;
+  unsigned long startMs = millis();
+  while (true) {
+    reading = imu.getReading();
+    // An existing fresh report is a usable baseline. Subsequent PID iterations
+    // still require new sequence numbers before updating rate or settling.
+    if (isFreshImu(reading, millis())) return true;
+    if (millis() - startMs >= timeoutMs) return false;
+    delay(1);
   }
 }
-void Robot::move(int cells) {
-  snapToCardinal();
+
+MotionResult Robot::finishMotion(MotionResult result, bool allowRecovery, const char* reason) {
+  motor_driver.brake();
+  if (result == MotionResult::ImuTimeout && !imuFaultReported) {
+    imuFaultReported = true;
+    Serial.print("|| Motion result: ImuTimeout -- ");
+    Serial.println(reason ? reason : "heading not ready");
+    imu.printDiagnostics();
+  }
+  delay(BRAKE_MS);
+  motor_driver.setMotors(0, 0);
+  if (result == MotionResult::Completed) imuFaultReported = false;
+  else if (result != MotionResult::ImuTimeout) {
+    Serial.print("|| Motion result: ");
+    Serial.println(motionResultName(result));
+  }
+  if (result == MotionResult::Stalled && allowRecovery) recoverFromStall();
+  motor_driver.resetEncoderL();
+  motor_driver.resetEncoderR();
+  return result;
+}
+
+MotionResult Robot::snapToCardinal() {
+  IMUReading reading;
+  if (!waitForFreshImu(reading)) return finishMotion(MotionResult::ImuTimeout, false);
+  float target = roundf(-reading.yaw / 90.0f) * 90.0f;
+  MotionResult result = turnToHeading(target, true);
+  if (result == MotionResult::Completed) intendedHeading = target;
+  return result;
+}
+
+MotionResult Robot::alignToCardinal(bool allowRecovery) {
+  IMUReading reading;
+  if (!waitForFreshImu(reading)) return finishMotion(MotionResult::ImuTimeout, false);
+  float currentYaw = -reading.yaw;
+
+  // Yaw is continuous, so this also handles negative headings and full revolutions.
+  float nearestCardinal = roundf(currentYaw / 90.0f) * 90.0f;
+
+  // Even an already-aligned heading must have fresh, stable rate measurements.
+  return turnToHeading(nearestCardinal, allowRecovery);
+}
+
+void Robot::recoverFromStall() {
+  Serial.println("|| RECOVERY -- backing up");
+  motor_driver.brake();
+  delay(BRAKE_MS);
+
+  float startL = motor_driver.getDistanceL();
+  float startR = motor_driver.getDistanceR();
+  unsigned long backupStartMs = millis();
+  bool backedUp = false;
+
+  while (millis() - backupStartMs < RECOVERY_BACKUP_TIMEOUT_MS) {
+    // Reverse travel decreases the signed encoder distance. Stop each wheel at
+    // its own target so one free wheel cannot keep reversing if the other jams.
+    bool reverseL = startL - motor_driver.getDistanceL() < RECOVERY_BACKUP_CM;
+    bool reverseR = startR - motor_driver.getDistanceR() < RECOVERY_BACKUP_CM;
+    if (!reverseL && !reverseR) {
+      backedUp = true;
+      break;
+    }
+    motor_driver.setMotors(reverseL ? -MIN_SPEED_FORWARD : 0,
+                           reverseR ? -MIN_SPEED_FORWARD : 0);
+    delay(5);
+  }
+
+  motor_driver.activeBrake();
+  delay(BRAKE_MS);
+  motor_driver.setMotors(0, 0);
+  if (!backedUp) Serial.println("|| RECOVERY -- backup timed out");
+
+  Serial.println("|| RECOVERY -- aligning to nearest 90 degrees");
+  // A failed recovery turn must return, not start another recovery recursively.
+  MotionResult alignment = alignToCardinal(false);
+
+  motor_driver.brake();
+  delay(BRAKE_MS);
+  motor_driver.setMotors(0, 0);
+  motor_driver.resetEncoderL();
+  motor_driver.resetEncoderR();
+  Serial.println(backedUp && alignment == MotionResult::Completed ? "|| RECOVERY complete -- command still failed"
+                                    : "|| RECOVERY incomplete -- continuing");
+}
+
+MotionResult Robot::move(int cells) {
+  if (cells <= 0) return MotionResult::Completed;
+  // If initial alignment stalls, its recovery replaces this command too.
+  MotionResult alignment = turnToHeading(intendedHeading, true);
+  if (alignment != MotionResult::Completed) return alignment;
     motor_driver.resetEncoderL();
     motor_driver.resetEncoderR();
     int targetCm = cells*(CELL_SIZE);
@@ -153,29 +276,43 @@ void Robot::move(int cells) {
     float startDistance = 0;
     float desiredDistance = startDistance + targetCm;
 
-    imu.update();
-    float startYaw = -imu.getYaw();   // record initial heading
-    unsigned long lastTime = micros();
+    IMUReading previous = imu.getReading();
+    float startYaw = intendedHeading;
 
     StallMonitor stall;
     stall.begin(motor_driver.getPosL(), motor_driver.getPosR(), millis());
 
     while (true) {
         // --- Update sensors ---
-        imu.update();
+        IMUReading reading = imu.getReading();
+        if (reading.generation != previous.generation) {
+          return finishMotion(MotionResult::ImuTimeout, false, "IMU stream restarted during move");
+        }
+        if (!isFreshImu(reading, millis())) {
+          return finishMotion(MotionResult::ImuTimeout, false, "stale heading during move");
+        }
+        if (stall.timedOut(motor_driver.getPosL(), motor_driver.getPosR(), millis())) {
+          return finishMotion(MotionResult::Stalled, true);
+        }
+        if (reading.sequence == previous.sequence) {
+          delay(1);
+          continue;
+        }
+        if (reading.timestampUs <= previous.timestampUs ||
+            reading.timestampUs - previous.timestampUs >= IMU_TIMEOUT_MS * 1000ULL) {
+          return finishMotion(MotionResult::ImuTimeout, false, "invalid sample interval during move");
+        }
         float currentDist =(motor_driver.getDistanceL() + motor_driver.getDistanceR())/2;
-        float currentYaw  = -imu.getYaw();
+        float currentYaw  = -reading.yaw;
 
-        unsigned long now = micros();
-        float dt = (now - lastTime) / 1000000.0f;
-        lastTime = now;
-        if (dt <= 0) dt = 0.001f;  // guard against a zero/degenerate sample
+        float dt = (reading.timestampUs - previous.timestampUs) / 1000000.0f;
+        previous = reading;
 
         // Wall safety stop: redefine the target as "here" so the distance PID
         // decelerates and settles smoothly instead of an abrupt motor cutoff.
         // eprev_dist is reset in the same pass so this isn't seen as a derivative spike.
         // Require 2 consecutive close readings so one noisy ToF sample can't trip it.
-        if (!wallDetected) {
+        if (!wallDetected && desiredDistance - currentDist > DIST_TOL) {
           uint16_t tofC = tof.getTofCenter();
           if (isValidTofReading(tofC) && tofC < 40) {
             wallCloseCount++;
@@ -228,15 +365,6 @@ void Robot::move(int cells) {
 
         motor_driver.setMotors(leftSpeed, rightSpeed);
 
-        // End this command on timeout so the caller can issue the next motion.
-        if (stall.timedOut(motor_driver.getPosL(), motor_driver.getPosR(), millis())) {
-          motor_driver.setMotors(0, 0);
-          Serial.println("|| NO MOTION TIMEOUT -- skipping move");
-          motor_driver.resetEncoderL();
-          motor_driver.resetEncoderR();
-          return;
-        }
-
         // Save errors
         eprev_dist    = error_dist;
         eprev_heading = error_heading;
@@ -277,115 +405,167 @@ void Robot::move(int cells) {
     motor_driver.resetEncoderL();
     motor_driver.resetEncoderR();
     delay(750 - BRAKE_MS);
+    return wallDetected ? MotionResult::Blocked : MotionResult::Completed;
 }
 
 
 
-void Robot::turn(int target) {
+MotionResult Robot::turn(int target) {
+  IMUReading reading;
+  if (!waitForFreshImu(reading)) return finishMotion(MotionResult::ImuTimeout, false);
+  float desiredHeading = -reading.yaw + target;
+  MotionResult result = turnToHeading(desiredHeading, true);
+  if (result == MotionResult::Completed) {
+    intendedHeading = roundf(desiredHeading / 90.0f) * 90.0f;
+  }
+  return result;
+}
+
+MotionResult Robot::turnCardinal(int quarterTurns) {
+  float target = intendedHeading + quarterTurns * 90.0f;
+  MotionResult result = turnToHeading(target, true);
+  if (result == MotionResult::Completed) intendedHeading = target;
+  return result;
+}
+
+MotionResult Robot::turnToHeading(float desiredHeading, bool allowRecovery) {
   float kp = 0.5;
   float kd = 0.06;  // dt-normalized (deg/s) derivative gain
-  float eprev = 0;
+  IMUReading previous;
+  if (!waitForFreshImu(previous)) return finishMotion(MotionResult::ImuTimeout, false);
+  // Calibration/startup waiting is not part of the turn's motion deadline.
+  unsigned long turnStartMs = millis();
+
+  float initialError = desiredHeading - (-previous.yaw);
+  unsigned long turnLimitMs = (unsigned long)(TURN_TIMEOUT_MS *
+      fmaxf(1.0f, fabsf(initialError) / 90.0f));
+  if (!allowRecovery) turnLimitMs = RECOVERY_ALIGN_TIMEOUT_MS;
+  float angularVelocity = 0;
+  bool haveRate = false;
   int stableCount = 0;
-
-  float startAngle = -imu.getYaw();
-  float desiredHeading = startAngle + target;
-
-  float pidSignal;
-  float speed = 0;
-  float current;
-  float error;
-  float derv;
-  float angularVelocity;
-
-  unsigned long lastTime = micros();
+  uint64_t stableSinceUs = 0;
+  enum class PulsePhase { Idle, Driving, Braking };
+  PulsePhase pulse = PulsePhase::Idle;
+  unsigned long pulseStartMs = 0;
 
   StallMonitor stall;
   stall.begin(motor_driver.getPosL(), motor_driver.getPosR(), millis());
 
-  motor_driver.setMotors(0, 0);
   while (true) {
-    imu.update();
-
-    current = -imu.getYaw();
-    error = desiredHeading - current;  // relative to desired heading
-
-    unsigned long now = micros();
-    float dt = (now - lastTime) / 1000000.0f;
-    lastTime = now;
-    if (dt <= 0) dt = 0.001f;  // guard against a zero/degenerate sample
-
-    derv = (error - eprev) / dt;  // deg/s
-    angularVelocity = -derv;      // deg/s, actual turn rate
-    pidSignal = kp * error + kd * derv;
-
-    // Scale PID output into motor speed range
-    speed = (pidSignal / (kp * MAX_ERROR)) * MAX_SPEED_ROT;
-    speed = constrain(speed, -MAX_SPEED_ROT, MAX_SPEED_ROT);
-
-    // --- Trimming logic ---
-    if (speed > 0.7 && speed <= MIN_SPEED_ROT) {
-      speed = MIN_SPEED_ROT;
-    } else if (speed < -0.7 && speed >= -MIN_SPEED_ROT) {
-      speed = -MIN_SPEED_ROT;
-    } else if (speed >= -0.7 && speed <= 0.7) {
-      speed = 0;  // deadband zone
+    IMUReading reading = imu.getReading();
+    unsigned long nowMs = millis();
+    // These checks run even when the sensor publishes no new measurements.
+    if (reading.generation != previous.generation) {
+      return finishMotion(MotionResult::ImuTimeout, false, "IMU stream restarted during turn");
+    }
+    if (!isFreshImu(reading, nowMs)) {
+      return finishMotion(MotionResult::ImuTimeout, false, "stale heading during turn");
+    }
+    if (nowMs - turnStartMs >= turnLimitMs) return finishMotion(MotionResult::TurnTimeout, false);
+    if (stall.timedOut(motor_driver.getPosL(), motor_driver.getPosR(), nowMs)) {
+      return finishMotion(MotionResult::Stalled, allowRecovery);
     }
 
-    motor_driver.setMotors(speed, -speed);
-
-    // End this command on timeout so the caller can issue the next motion.
-    if (stall.timedOut(motor_driver.getPosL(), motor_driver.getPosR(), millis())) {
-      motor_driver.setMotors(0, 0);
-      Serial.println(" || NO MOTION TIMEOUT -- skipping turn");
-      return;
+    // End a pulse on wall-clock time, even if the IMU stops reporting mid-pulse.
+    if (pulse == PulsePhase::Driving && nowMs - pulseStartMs >= TURN_PULSE_MS) {
+      motor_driver.brake();
+      pulse = PulsePhase::Braking;
+      pulseStartMs = nowMs;
     }
+    if (reading.sequence == previous.sequence) {
+      delay(1);
+      continue;
+    }
+    if (reading.timestampUs <= previous.timestampUs ||
+        reading.timestampUs - previous.timestampUs >= IMU_TIMEOUT_MS * 1000ULL) {
+      return finishMotion(MotionResult::ImuTimeout, false, "invalid sample interval during turn");
+    }
+    float dt = (reading.timestampUs - previous.timestampUs) / 1000000.0f;
+    float current = -reading.yaw;
+    float error = desiredHeading - current;
+    float rawRate = (current - (-previous.yaw)) / dt;
+    float alpha = dt / (TURN_RATE_FILTER_SEC + dt);
+    angularVelocity = haveRate ? angularVelocity + alpha * (rawRate - angularVelocity) : rawRate;
+    haveRate = true;
+    previous = reading;
 
-    eprev = error;
+    // Serial.print("|| Heading: ");
+    // Serial.print(current);
+    // Serial.print(" || Target: ");
+    // Serial.print(desiredHeading);
     // Serial.print(" || error: ");
-    // Serial.print(error);
+    // Serial.println(error);
     // Serial.print(" || rate: ");
-    // Serial.print(angularVelocity);
-    // Serial.print(" || speed: ");
-    // Serial.print(speed);
-    // Serial.print(" || dt(ms): ");
-    // Serial.println(dt * 1000.0f);
+    // Serial.println(angularVelocity);
 
-    // Settle only once heading AND rotation rate are both near zero -- otherwise
-    // leftover spin momentum coasts the heading past the target after motors cut.
-    if (fabs(error) < ERROR_TOL && fabs(angularVelocity) < RATE_TOL) {
-      stableCount++;
-      if (stableCount >= REQUIRED_STABLE) break;
+    // Count distinct measurements, and require a real span of settled time.
+    if (fabsf(error) <= ERROR_TOL && fabsf(rawRate) <= RATE_TOL && fabsf(angularVelocity) <= RATE_TOL) {
+      if (stableCount == 0) stableSinceUs = reading.timestampUs;
+      ++stableCount;
+      if (stableCount >= TURN_STABLE_SAMPLES && reading.timestampUs - stableSinceUs >= TURN_SETTLE_US) {
+        finishMotion(MotionResult::Completed, false);
+        delay(750 - BRAKE_MS);
+        return MotionResult::Completed;
+      }
     } else {
       stableCount = 0;
     }
-  }
 
-  motor_driver.setMotors(0, 0);
-  delay(750);
+    if (fabsf(error) <= ERROR_TOL) {
+      motor_driver.brake();
+      pulse = PulsePhase::Braking;
+      pulseStartMs = nowMs;
+    } else if (fabsf(error) <= TURN_FINE_ANGLE) {
+      // Brake the main turn before issuing a short fixed-PWM correction.
+      if (pulse == PulsePhase::Idle) {
+        motor_driver.brake();
+        pulse = PulsePhase::Braking;
+        pulseStartMs = nowMs;
+      }
+      if (pulse == PulsePhase::Braking && nowMs - pulseStartMs >= TURN_PULSE_BRAKE_MS &&
+          fabsf(rawRate) <= RATE_TOL && fabsf(angularVelocity) <= RATE_TOL) {
+        int speed = error > 0 ? MIN_SPEED_ROT : -MIN_SPEED_ROT;
+        motor_driver.setMotors(speed, -speed);
+        pulse = PulsePhase::Driving;
+        pulseStartMs = nowMs;
+      }
+    } else {
+      pulse = PulsePhase::Idle;
+      float pidSignal = kp * error - kd * angularVelocity;
+      float speed = constrain((pidSignal / (kp * MAX_ERROR)) * MAX_SPEED_ROT,
+                              (float)-MAX_SPEED_ROT, (float)MAX_SPEED_ROT);
+      if (fabsf(speed) <= DEADZONE) {
+        motor_driver.brake();
+      } else {
+        if (speed > 0 && speed < MIN_SPEED_ROT) speed = MIN_SPEED_ROT;
+        if (speed < 0 && speed > -MIN_SPEED_ROT) speed = -MIN_SPEED_ROT;
+        motor_driver.setMotors(speed, -speed);
+      }
+    }
+  }
 }
 
 
 void Robot::update(void* parameters) {
   while (true) {
     tof.updateReadings();
-    imu.getRoll();
 
-    vTaskDelay(0);  // yield
+    vTaskDelay(1);  // IMU sampling runs independently of these blocking reads.
   }
 }
 
 void Robot::print_all_sensors() {
-  // Serial.print("Yaw: ");
-  // Serial.print(imu.getYaw());
+  Serial.print("Yaw: ");
+  Serial.println(imu.getYaw() );
 
-  Serial.print(" Left: ");
-  Serial.print(tof.getTofLeft());
+  // Serial.print(" Left: ");
+  // Serial.print(tof.getTofLeft());
 
-  Serial.print(" Center: ");
-  Serial.print(tof.getTofCenter());
+  // Serial.print(" Center: ");
+  // Serial.print(tof.getTofCenter());
 
-  Serial.print(" Right: ");
-  Serial.println(tof.getTofRight());
+  // Serial.print(" Right: ");
+  // Serial.println(tof.getTofRight());
 
   // Serial.print(" DistanceL: ");
   // Serial.println(motor_driver.getDistanceL());

@@ -5,9 +5,10 @@
 #include "IMU.h"
 #include "motor.h"
 #include "Tof.h"
+#include "MotionResult.h"
 
 #define THRESHOLD_SIDE 170
-#define THRESHOLD_FRONT 130
+#define THRESHOLD_FRONT 145
 
 
 class Robot {
@@ -18,21 +19,30 @@ public:
   bool isWallFront();
   bool isWallLeft();
   bool isWallRight();
-  // Motion commands stop and return on a no-motion timeout, allowing the next command.
-  void move(int cells);  // The function were the distance PID code and the align to zero codes are supposed to be
-  void turn(int target);   // The function were the align to a specific angle is supposed to be
+  // Recovery never changes a failed command into Completed.
+  MotionResult move(int cells);
+  MotionResult turn(int target);  // Relative turn, for manual motion sequences
+  MotionResult turnCardinal(int quarterTurns);  // Maze target: last confirmed heading + N * 90
   // void moveWithHeading(int target);
   void print_all_sensors();  // For debugging purposes
   float calibrateDriftFactor();
   void getDriftFactor();
-  void snapToCardinal(); 
+  MotionResult snapToCardinal();
+  bool isImuReady();
 private:
   static TOF tof;
   static IMU imu;
   static MotorDriver motor_driver;
 
+  static float intendedHeading;
+  static bool imuFaultReported;
+  bool waitForFreshImu(IMUReading& reading);
+  MotionResult finishMotion(MotionResult result, bool allowRecovery, const char* reason = nullptr);
+  MotionResult alignToCardinal(bool allowRecovery);
+  MotionResult turnToHeading(float desiredHeading, bool allowRecovery);
+  void recoverFromStall();
+
   static void update(void * parameters);  // An infinite loop for upadting all sensors
-  float heading;
 };
 
 #endif

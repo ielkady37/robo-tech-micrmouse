@@ -33,9 +33,10 @@ bool API::wallLeft() {
   return robot.isWallLeft();
 }
 
-void API::moveForward(int distance) {
+MotionResult API::moveForward(int distance) {
   for (int i = 0; i < distance; i++) {
-    robot.move(1);
+    MotionResult result = robot.move(1);
+    if (result != MotionResult::Completed) return result;
 
     switch (currentDirection) {
       case NORTH:
@@ -54,22 +55,35 @@ void API::moveForward(int distance) {
 
     delay(100);
   }
+  return MotionResult::Completed;
 }
 
-void API::turnRight() {
-  robot.turn(90);
+MotionResult API::turnRight() {
+  MotionResult result = robot.turnCardinal(1);
+  if (result != MotionResult::Completed) return result;
 
   currentDirection = static_cast<Direction>((currentDirection + 1) % 4);
 
   delay(100);
+  return MotionResult::Completed;
 }
 
-void API::turnLeft() {
-  robot.turn(-90);
+MotionResult API::turnLeft() {
+  MotionResult result = robot.turnCardinal(-1);
+  if (result != MotionResult::Completed) return result;
 
   currentDirection = static_cast<Direction>((currentDirection + 3) % 4);
 
   delay(100);
+  return MotionResult::Completed;
+}
+
+MotionResult API::alignHeading() {
+  return robot.turnCardinal(0);
+}
+
+bool API::imuReady() {
+  return robot.isImuReady();
 }
 
 void API::setWall(int x, int y, char direction) {
