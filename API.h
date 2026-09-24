@@ -3,8 +3,8 @@
 #include <string>
 #include "Robot.h"
 
-#define MAZE_WIDTH 8 //Should be 16 in real thing
-#define MAZE_LENGTH 8 //Should be 16 in real thing
+#define MAZE_WIDTH 16 //Should be 16 in real thing
+#define MAZE_LENGTH 16 //Should be 16 in real thing
 
 
 // Add the Direction enum at the top
@@ -28,9 +28,11 @@ public:
   static bool wallRight();
   static bool wallLeft();
 
-  static void moveForward(int distance = 1);
-  static void turnRight();
-  static void turnLeft();
+  static MotionResult moveForward(int distance = 1);
+  static MotionResult turnRight();
+  static MotionResult turnLeft();
+  static MotionResult alignHeading();
+  static bool imuReady();
 
   static void setWall(int x, int y, char direction);
   static void clearWall(int x, int y, char direction);
